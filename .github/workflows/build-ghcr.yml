@@ -1,0 +1,177 @@
+name: Build GHCR Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - ".github/ISSUE_TEMPLATE/**"
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.metadata.outputs.image }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Resolve image metadata
+        id: metadata
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          base_version="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || echo v0.0.0)"
+          version="${base_version#v}-napig.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::7}"
+          tag="build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Build Shell archive
+        env:
+          NAPCAT_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build:webui
+          pnpm run build:shell
+          pnpm run build:plugin-builtin
+          cd packages/napcat-shell/dist
+          npm pkg delete devDependencies
+          npm install --omit=dev
+          rm -f package-lock.json
+          zip -qr "$GITHUB_WORKSPACE/NapCat.Shell.zip" .
+      - uses: actions/upload-artifact@v6
+        with:
+          name: NapCat.Shell.zip
+          path: NapCat.Shell.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  build:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      IMAGE_NAME: ${{ needs.metadata.outputs.image }}
+      IMAGE_TAG: ${{ needs.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
+        with:
+          name: NapCat.Shell.zip
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build ${{ matrix.arch }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          provenance: false
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.version }}
+          cache-from: type=gha,scope=napig-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=napig-${{ matrix.arch }}
+      - name: Check runtime files and shared libraries
+        env:
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          docker run --rm --entrypoint /bin/sh "${IMAGE_NAME}:${IMAGE_TAG}-${ARCH}" -ec '
+            unzip -tq /app/NapCat.Shell.zip
+            unzip -q /app/NapCat.Shell.zip -d /tmp/napcat-shell
+            test -s /tmp/napcat-shell/napcat.mjs
+            test -s /tmp/napcat-shell/static/index.html
+            test -e /tmp/napcat-shell/node_modules/express/package.json
+            test -e /tmp/napcat-shell/node_modules/ws/package.json
+            ldd /opt/QQ/qq > /tmp/qq-libraries
+            ldd /opt/QQ/resources/app/wrapper.node >> /tmp/qq-libraries
+            case "$(dpkg --print-architecture)" in
+              amd64) native_arch=x64 ;;
+              arm64) native_arch=arm64 ;;
+            esac
+            ldd "/tmp/napcat-shell/native/packet/MoeHoo.linux.${native_arch}.node" >> /tmp/qq-libraries
+            ldd "/tmp/napcat-shell/native/napi2native/napi2native.linux.${native_arch}.node" >> /tmp/qq-libraries
+            ldd "/tmp/napcat-shell/native/ffmpeg/ffmpegAddon.linux.${native_arch}.node" >> /tmp/qq-libraries
+            cat /tmp/qq-libraries
+            ! grep -q "not found" /tmp/qq-libraries
+          '
+      - name: Push ${{ matrix.arch }} image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: docker push "${IMAGE_NAME}:${IMAGE_TAG}-${ARCH}"
+
+  manifest:
+    needs: [metadata, build]
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: ${{ needs.metadata.outputs.image }}
+      IMAGE_TAG: ${{ needs.metadata.outputs.tag }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create multi-platform build and SHA manifests
+        shell: bash
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${IMAGE_TAG}" \
+            --tag "${IMAGE_NAME}:sha-${GITHUB_SHA::7}" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-amd64" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-arm64"
+      - name: Publish latest for the default branch
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          docker buildx imagetools create --tag "${IMAGE_NAME}:latest" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-amd64" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-arm64"
+      - name: Publish release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          docker buildx imagetools create --tag "${IMAGE_NAME}:${GITHUB_REF_NAME}" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-amd64" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-arm64"

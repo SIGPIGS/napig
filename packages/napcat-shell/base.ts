@@ -44,6 +44,7 @@ import { applyPendingUpdates } from '@/napcat-webui-backend/src/api/UpdateNapCat
 import { migrateLegacyGlobalPath } from './global-migrate';
 import { getDataPaths } from './data-path';
 import { connectToNamedPipe } from './pipe';
+import { runStartupStep } from './startup-step';
 
 // NapCat Shell App ES 入口文件
 async function handleUncaughtExceptions (logger: LogWrapper) {
@@ -120,6 +121,15 @@ async function handleLogin (
     inner_resolve = resolve;
   });
   // 连接服务
+  let resolveConnection: () => void;
+  const connection = new Promise<void>((resolve) => {
+    resolveConnection = resolve;
+  });
+  runStartupStep(logger, 'connectLoginService', () => connection).catch(() => {
+    const message = `QQ 登录服务连接超时（MSF 状态 ${loginService.getMsfStatus()}），请检查网络和 QQ 代理配置`;
+    WebUiDataRuntime.setQQLoginError(message);
+    WebUiDataRuntime.setQQLoginPhase('offline');
+  });
 
   const loginListener = new NodeIKernelLoginListener();
   loginListener.onUserLoggedIn = (userid: string) => {
@@ -157,6 +167,9 @@ async function handleLogin (
     WebUiDataRuntime.setQQLoginPhase('offline');
   };
   loginListener.onLoginConnected = () => {
+    resolveConnection();
+    WebUiDataRuntime.setQQLoginError('');
+    logger.log('[Core] [Login] onLoginConnected', { msfStatus: loginService.getMsfStatus() });
     waitForNetworkConnection(loginService, logger).then(async () => {
       if (!context.loginFlowInitialized) {
         context.loginFlowInitialized = true;
@@ -168,7 +181,14 @@ async function handleLogin (
         const requested = loginService.getQRCodePicture();
         logger.logWarn('[Core] [Login] 登录服务重连完成，正在获取二维码', { requested, msfStatus: loginService.getMsfStatus() });
       }
-    }).catch(e => logger.logError(e));
+    }).catch(e => {
+      logger.logError(e);
+      WebUiDataRuntime.setQQLoginError(`QQ 登录服务初始化失败: ${(e as Error).message}`);
+      WebUiDataRuntime.setQQLoginPhase('offline');
+    });
+  };
+  loginListener.onLoginConnecting = () => {
+    logger.log('[Core] [Login] onLoginConnecting', { msfStatus: loginService.getMsfStatus() });
   };
   loginListener.onQRCodeGetPicture = ({ pngBase64QrcodeData, qrcodeUrl }) => {
     WebUiDataRuntime.setQQLoginQrcodeURL(qrcodeUrl);
@@ -216,7 +236,9 @@ async function handleLogin (
   };
 
   loginService.addKernelLoginListener(proxiedListenerOf(loginListener, logger));
-  loginService.connect();
+  logger.log('[Core] [Login] listener registered, connecting');
+  const connected = loginService.connect();
+  logger.log('[Core] [Login] connect returned', { connected, msfStatus: loginService.getMsfStatus() });
   return await selfInfo;
 }
 async function handleLoginInner (context: { isLogined: boolean; loginFlowInitialized: boolean; }, logger: LogWrapper, loginService: NodeIKernelLoginService, quickLoginUin: string | undefined, historyLoginList: LoginListItem[]) {
@@ -643,7 +665,15 @@ export async function NCoreInitShell () {
   if (!(process.env['NAPCAT_DISABLE_PIPE'] === '1' || process.env['NAPCAT_WORKER_PROCESS'] === '1')) {
     await connectToNamedPipe(logger).catch(e => logger.logError('命名管道连接失败', e));
   }
-  const wrapper = loadQQWrapper(basicInfoWrapper.QQMainPath, basicInfoWrapper.getFullQQVersion());
+  logger.log('[Core] [Startup] runtime', {
+    qqVersion: basicInfoWrapper.getFullQQVersion(),
+    arch: process.arch,
+    electron: process.versions['electron'],
+    node: process.versions.node,
+    worker: process.env['NAPCAT_WORKER_PROCESS'] === '1',
+    singleProcess: process.env['NAPCAT_DISABLE_MULTI_PROCESS'] === '1',
+  });
+  const wrapper = await runStartupStep(logger, 'loadQQWrapper', () => loadQQWrapper(basicInfoWrapper.QQMainPath, basicInfoWrapper.getFullQQVersion()));
   // wrapper.node 加载后再初始化 hook，按 schema 读取配置
   const napcatConfig = loadNapcatConfig(pathWrapper.configPath);
   await nativePacketHandler.init(basicInfoWrapper.getFullQQVersion(), napcatConfig.o3HookMode === 1);
@@ -707,9 +737,9 @@ export async function NCoreInitShell () {
 
   if (!basicInfoWrapper.QQVersionAppid || !basicInfoWrapper.QQVersionQua) throw new Error('QQVersionAppid or QQVersionQua  is not defined');
 
-  await initializeEngine(engine, basicInfoWrapper, dataPathGlobal, systemPlatform, systemVersion);
-  await initializeLoginService(loginService, basicInfoWrapper, dataPathGlobal, systemVersion, hostname);
-  handleProxy(session, logger);
+  await runStartupStep(logger, 'initializeEngine', () => initializeEngine(engine, basicInfoWrapper, dataPathGlobal, systemPlatform, systemVersion));
+  await runStartupStep(logger, 'initializeLoginService', () => initializeLoginService(loginService, basicInfoWrapper, dataPathGlobal, systemVersion, hostname));
+  await runStartupStep(logger, 'handleProxy', () => handleProxy(session, logger));
 
   let quickLoginUin: string | undefined;
   try {
@@ -722,7 +752,7 @@ export async function NCoreInitShell () {
     logger.logWarn('解析命令行参数失败，无法使用快速登录功能', error);
   }
 
-  const historyLoginList = (await loginService.getLoginList()).LocalLoginInfoList;
+  const historyLoginList = (await runStartupStep(logger, 'getLoginList', () => loginService.getLoginList())).LocalLoginInfoList;
 
   const dataTimestape = new Date().getTime().toString();
   o3Service.reportAmgomWeather('login', 'a1', [dataTimestape, '0', '0']);
