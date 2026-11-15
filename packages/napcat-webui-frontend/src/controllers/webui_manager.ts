@@ -78,88 +78,6 @@ export default class WebUIManager {
     return data.data;
   }
 
-  public static async getLatestTag () {
-    const { data } =
-      await serverRequest.get<ServerResponse<string>>('/base/getLatestTag');
-    return data.data;
-  }
-
-  /**
-   * 版本信息接口
-   */
-  static readonly VersionTypes = {
-    RELEASE: 'release',
-    PRERELEASE: 'prerelease',
-    ACTION: 'action',
-  } as const;
-
-  /**
-   * 获取所有可用的版本列表（支持分页、过滤和搜索）
-   * 懒加载：根据 type 参数只获取对应类型的版本
-   */
-  public static async getAllReleases (options: {
-    page?: number;
-    pageSize?: number;
-    type?: 'release' | 'action' | 'all';
-    search?: string;
-    mirror?: string;
-  } = {}) {
-    const { page = 1, pageSize = 20, type = 'release', search = '', mirror } = options;
-    const { data } = await serverRequest.get<ServerResponse<{
-      versions: Array<{
-        tag: string;
-        type: 'release' | 'prerelease' | 'action';
-        artifactId?: number;
-        artifactName?: string;
-        createdAt?: string;
-        expiresAt?: string;
-        size?: number;
-        workflowRunId?: number;
-        headSha?: string;
-      }>;
-      pagination: {
-        page: number;
-        pageSize: number;
-        total: number;
-        totalPages: number;
-      };
-      mirror?: string;
-    }>>('/base/getAllReleases', {
-      params: { page, pageSize, type, search, mirror },
-    });
-    return data.data;
-  }
-
-  public static async getMirrors () {
-    const { data } =
-      await serverRequest.get<ServerResponse<{ mirrors: string[]; }>>('/base/getMirrors');
-    return data.data;
-  }
-
-  public static async UpdateNapCat (mirror?: string) {
-    const { data } = await serverRequest.post<ServerResponse<any>>(
-      '/UpdateNapCat/update',
-      { mirror },
-      { timeout: 120000 } // 2分钟超时
-    );
-    return data;
-  }
-
-  /**
-   * 更新到指定版本
-   * @param targetVersion 目标版本 tag，如 "v4.9.9" 或 "action-123456"
-   * @param force 是否强制更新（允许降级）
-   * @param mirror 指定使用的镜像
-   */
-  public static async UpdateNapCatToVersion (targetVersion: string, force: boolean = false, mirror?: string) {
-    const { data } = await serverRequest.post<ServerResponse<any>>(
-      '/UpdateNapCat/update',
-      { targetVersion, force, mirror },
-      { timeout: 120000 } // 2分钟超时
-    );
-    return data;
-  }
-
   public static async getQQVersion () {
     const { data } =
       await serverRequest.get<ServerResponse<string>>('/base/QQVersion');
@@ -362,13 +280,6 @@ export default class WebUIManager {
     const { data } = await serverRequest.post<ServerResponse<any>>(
       '/auth/passkey/verify-authentication',
       { response }
-    );
-    return data.data;
-  }
-
-  public static async GetNapCatFileHash () {
-    const { data } = await serverRequest.get<ServerResponse<{ hash: string; file: string; algorithm: string; }>>(
-      '/base/GetNapCatFileHash'
     );
     return data.data;
   }

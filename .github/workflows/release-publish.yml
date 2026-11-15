@@ -50,7 +50,6 @@ jobs:
           pnpm i
           pnpm --filter napcat-webui-frontend run build || exit 1
           pnpm run ${{ matrix.target.build_cmd }}
-          pnpm --filter napcat-plugin-builtin run build || exit 1
           mv ${{ matrix.target.src_dir }} ${{ matrix.target.dist_dir }}
           cd ${{ matrix.target.dist_dir }}
           # --omit=dev still resolves dev peer dependencies; remove build tooling first.

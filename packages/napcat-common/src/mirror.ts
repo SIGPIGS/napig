@@ -617,13 +617,6 @@ function compareSemVerSimple (a: string, b: string): number {
  * 从 tags 列表中获取最新的 release tag
  * 不依赖 GitHub API
  */
-// Update definitions validation locally first if possible.
-// I'll assume valid typescript.
-// I will split this into two tool calls to avoid complexity.
-// 1. Update mirror.ts
-// 2. Update UpdateNapCat.ts
-
-// This tool call: Update mirror.ts
 export async function getLatestReleaseTag (owner: string, repo: string, mirror?: string): Promise<string> {
   const result = await getAllGitHubTags(owner, repo, mirror);
 

@@ -40,10 +40,6 @@ vi.mock('@/napcat-onebot/network/http-server-sse', () => ({
   OB11HttpSSEServerAdapter: class {},
 }));
 
-vi.mock('@/napcat-onebot/network/plugin-manger', () => ({
-  OB11PluginMangerAdapter: class {},
-}));
-
 // msg.ts 按目录导入 proto，vitest 解析不了；这里用不到，给个空模块
 vi.mock('napcat-core/packet/transformer/proto', () => ({}));
 

@@ -6,7 +6,6 @@
  *
  * 【永不缓存 - Network Only】
  *   - /api/*                          WebUI API
- *   - /plugin/:id/api/*               插件 API
  *   - /files/theme.css                动态主题 CSS
  *   - /webui/fonts/CustomFont.woff    用户自定义字体
  *   - WebSocket / SSE 连接
@@ -18,11 +17,7 @@
  *
  * 【网络优先 - Network First】
  *   - /webui/* (HTML 导航)            SPA 页面
- *   - /plugin/:id/page/*              插件页面
- *   - /plugin/:id/files/*             插件文件系统静态资源
  *
- * 【后台更新 - Stale-While-Revalidate】
- *   - /plugin/:id/mem/*               插件内存静态资源
  */
 
 const CACHE_NAME = 'napcat-webui-v{{VERSION}}';
@@ -33,8 +28,6 @@ const CACHE_CONFIG = {
   MAX_STATIC_ENTRIES: 200,
   // QQ 头像缓存最大条目数
   MAX_AVATAR_ENTRIES: 100,
-  // 插件资源缓存最大条目数
-  MAX_PLUGIN_ENTRIES: 50,
 };
 
 // ============ 路由匹配辅助函数 ============
@@ -45,9 +38,6 @@ const CACHE_CONFIG = {
 function isNeverCache (url, request) {
   // WebUI API
   if (url.pathname.startsWith('/api/')) return true;
-
-  // 插件 API: /plugin/:id/api/*
-  if (/^\/plugin\/[^/]+\/api(\/|$)/.test(url.pathname)) return true;
 
   // 动态主题 CSS
   if (url.pathname === '/files/theme.css' || url.pathname.endsWith('/files/theme.css')) return true;
@@ -88,30 +78,6 @@ function isQLogoAvatar (url) {
   return url.hostname === 'q1.qlogo.cn' || url.hostname === 'q2.qlogo.cn';
 }
 
-/**
- * 检查是否为插件文件系统静态资源（网络优先）
- */
-function isPluginStaticFiles (url) {
-  // /plugin/:id/files/*
-  return /^\/plugin\/[^/]+\/files(\/|$)/.test(url.pathname);
-}
-
-/**
- * 检查是否为插件内存静态资源（Stale-While-Revalidate）
- */
-function isPluginMemoryAsset (url) {
-  // /plugin/:id/mem/*
-  return /^\/plugin\/[^/]+\/mem(\/|$)/.test(url.pathname);
-}
-
-/**
- * 检查是否为插件页面（Network First）
- */
-function isPluginPage (url) {
-  // /plugin/:id/page/*
-  return /^\/plugin\/[^/]+\/page(\/|$)/.test(url.pathname);
-}
-
 // ============ 缓存管理函数 ============
 
 /**
@@ -135,7 +101,6 @@ async function trimCache (cacheName, maxEntries) {
  */
 function getCacheLimitForRequest (url) {
   if (isQLogoAvatar(url)) return CACHE_CONFIG.MAX_AVATAR_ENTRIES;
-  if (isPluginStaticFiles(url) || isPluginMemoryAsset(url)) return CACHE_CONFIG.MAX_PLUGIN_ENTRIES;
   return CACHE_CONFIG.MAX_STATIC_ENTRIES;
 }
 
@@ -191,37 +156,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. 插件文件系统静态资源 - Network First
-  if (isPluginStaticFiles(url)) {
-    event.respondWith(networkFirst(request));
-    return;
-  }
-
-  // 5. 插件内存静态资源 - Stale-While-Revalidate
-  if (isPluginMemoryAsset(url)) {
-    event.respondWith(staleWhileRevalidate(request, url));
-    return;
-  }
-
-  // 6. 插件页面 - Network First
-  if (isPluginPage(url)) {
-    event.respondWith(networkFirst(request));
-    return;
-  }
-
-  // 7. HTML 导航请求 - Network First
+  // 4. HTML 导航请求 - Network First
   if (request.mode === 'navigate') {
     event.respondWith(networkFirst(request));
     return;
   }
 
-  // 8. 其他同源请求 - Network Only（避免意外缓存）
+  // 5. 其他同源请求 - Network Only（避免意外缓存）
   if (url.origin === self.location.origin) {
     // 不缓存，直接穿透
 
   }
 
-  // 9. 其他外部请求 - Network Only
+  // 6. 其他外部请求 - Network Only
 });
 
 // ============ 缓存策略实现 ============
@@ -300,38 +247,4 @@ async function networkFirst (request) {
     }
     return new Response('Offline', { status: 503 });
   }
-}
-
-/**
- * Stale-While-Revalidate 策略
- * 立即返回缓存（如果有），同时后台更新缓存
- */
-async function staleWhileRevalidate (request, url) {
-  const cache = await caches.open(CACHE_NAME);
-  const cachedResponse = await cache.match(request);
-
-  // 后台刷新缓存
-  const fetchPromise = fetch(request).then((networkResponse) => {
-    if (networkResponse && networkResponse.status === 200) {
-      cache.put(request, networkResponse.clone());
-      trimCache(CACHE_NAME, getCacheLimitForRequest(url));
-    }
-    return networkResponse;
-  }).catch((error) => {
-    console.log('[SW] SWR background fetch failed:', error);
-    return null;
-  });
-
-  // 如果有缓存，立即返回缓存
-  if (cachedResponse) {
-    return cachedResponse;
-  }
-
-  // 没有缓存，等待网络
-  const networkResponse = await fetchPromise;
-  if (networkResponse) {
-    return networkResponse;
-  }
-
-  return new Response('Network error', { status: 503 });
 }

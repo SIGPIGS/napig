@@ -56,7 +56,6 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run build:webui
           pnpm run build:shell
-          pnpm run build:plugin-builtin
           cd packages/napcat-shell/dist
           npm pkg delete devDependencies
           npm install --omit=dev

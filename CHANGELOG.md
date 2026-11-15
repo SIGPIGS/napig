@@ -3,6 +3,31 @@
 从 NapCatQQ 上游 fork 开始维护 napig 的更新记录。后续变更应随对应提交同步更新本文件，
 使用日期作为变更标题前缀，新的记录写在前面。
 
+## 2026-11-15 移除在线更新
+
+- 移除新版本提示、版本选择、升级与降级操作，以及上游 Release 信息查询。
+- 删除在线更新 API 和启动时应用待更新文件的逻辑。更新运行代码统一通过构建并替换镜像完成。
+- 系统信息继续显示当前构建、QQ、WebUI 和系统信息，不再提供版本管理入口。
+  相关代码：[system_info.tsx](packages/napcat-webui-frontend/src/components/system_info.tsx)、
+  [BaseInfo.ts](packages/napcat-webui-backend/src/api/BaseInfo.ts)。
+
+## 2026-11-15 移除运行时插件系统
+
+- 删除插件管理、插件商店、扩展页面和配套的前端组件、控制器及类型。
+- 删除插件 API、配置与安装接口、动态路由，以及插件页面和静态资源的服务与缓存策略。
+- 删除插件扫描与加载器、生命周期和消息分发逻辑、内置示例插件，以及对应的配置定义、路径和构建步骤。
+- 保留 OneBot 的 HTTP、WebSocket、反向 WebSocket 及核心消息处理。旧配置中的插件字段在加载时被忽略，
+  既有网络客户端配置继续使用。
+  相关代码：[OneBot 入口](packages/napcat-onebot/index.ts)、
+  [OneBot 配置](packages/napcat-onebot/config/config.ts)、
+  [WebUI 入口](packages/napcat-webui-backend/index.ts)。
+
+## 2026-11-15 移除上游社区资源入口
+
+- 删除“关于我们”中的“相关资源”卡片、入群密码计算和账号选择逻辑。
+- 删除仅用于入群密码的文件哈希接口及前端调用。保留项目介绍、技术栈和版权信息。
+  相关代码：[about.tsx](packages/napcat-webui-frontend/src/pages/dashboard/about.tsx)。
+
 ## 2026-11-15 修复登录启动竞态和二维码刷新状态
 
 ### 修复
@@ -20,11 +45,3 @@
   相关代码：[base.ts](packages/napcat-shell/base.ts)、[Data.ts](packages/napcat-webui-backend/src/helper/Data.ts)。
 - **改进连接等待超时的诊断信息。** 明确提示未收到连接完成事件，并记录事件到达时初始化是否完成，
   便于区分事件处理时序问题与实际的网络连接问题。
-
-### 验证
-
-- Shell TypeScript 类型检查、改动文件的 ESLint 检查及 WebUI、Shell、内置插件构建通过。
-- 检查连接通知提前到达、正常到达、提前连接后断开、重复通知，以及刷新未就绪、重连和成功路径。
-- 在 Linux amd64、QQ `3.2.34-53644` 环境中，保留触发故障的 `global` 数据副本连续两次启动，
-  均正常生成及刷新二维码；触发竞态的 MSF 配置缓存保持不变。
-- 部署后保留原有配置与设备标识，扫码登录、Core 就绪和 OneBot 反向 WebSocket 连接验证通过。

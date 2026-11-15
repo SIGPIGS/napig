@@ -40,7 +40,6 @@ import { proxiedListenerOf } from '@/napcat-core/helper/proxy-handler';
 import { createOfflineRecovery } from '@/napcat-core/helper/offline-recovery';
 import { QQBasicInfoWrapper } from '@/napcat-core/helper/qq-basic-info';
 import { statusHelperSubscription } from '@/napcat-core/helper/status';
-import { applyPendingUpdates } from '@/napcat-webui-backend/src/api/UpdateNapCat';
 import { migrateLegacyGlobalPath } from './global-migrate';
 import { getDataPaths } from './data-path';
 import { connectToNamedPipe } from './pipe';
@@ -683,7 +682,6 @@ export async function NCoreInitShell () {
     logger.setFileLogEnabled(false);
   }
   handleUncaughtExceptions(logger);
-  await applyPendingUpdates(pathWrapper, logger);
 
   // 提前初始化 Native 模块（在登录前加载）
   const basicInfoWrapper = new QQBasicInfoWrapper({ logger });

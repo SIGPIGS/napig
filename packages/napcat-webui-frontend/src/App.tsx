@@ -25,9 +25,6 @@ const FileManagerPage = lazy(() => import('@/pages/dashboard/file_manager'));
 const LogsPage = lazy(() => import('@/pages/dashboard/logs'));
 const NetworkPage = lazy(() => import('@/pages/dashboard/network'));
 const TerminalPage = lazy(() => import('@/pages/dashboard/terminal'));
-const PluginPage = lazy(() => import('@/pages/dashboard/plugin'));
-const PluginStorePage = lazy(() => import('@/pages/dashboard/plugin_store'));
-const ExtensionPage = lazy(() => import('@/pages/dashboard/extension'));
 
 function App () {
   return (
@@ -79,9 +76,6 @@ function AppRoutes () {
         </Route>
         <Route path='file_manager' element={<FileManagerPage />} />
         <Route path='terminal' element={<TerminalPage />} />
-        <Route path='plugins' element={<PluginPage />} />
-        <Route path='plugin_store' element={<PluginStorePage />} />
-        <Route path='extension' element={<ExtensionPage />} />
         <Route path='about' element={<AboutPage />} />
       </Route>
       <Route path='/qq_login' element={<QQLoginPage />} />

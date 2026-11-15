@@ -7,6 +7,7 @@ import { OB11MessageDataSchema, OB11MessageSchema, OB11PostSendMsgSchema } from 
 import { OB11MessageSchema as OB11ActionMessageSchema } from '../napcat-onebot/action/schemas';
 import { OneBotConfigSchema, loadConfig as loadOneBotConfig, OneBotConfig } from '../napcat-onebot/config';
 import { NapcatConfigSchema } from '../napcat-core/helper/config';
+import { loadConfig as loadWebUIConfig } from '../napcat-webui-backend/src/onebot/config';
 
 describe('NapCat Schemas Compilation', () => {
   test('should compile OB11MessageDataSchema without duplicate id error', () => {
@@ -88,7 +89,6 @@ describe('NapCat Configuration Loaders', () => {
         httpClients: [],
         websocketServers: [],
         websocketClients: [],
-        plugins: [],
       },
     };
     const loaded = loadOneBotConfig(partialConfig);
@@ -115,7 +115,6 @@ describe('NapCat Configuration Loaders', () => {
           debug: false,
           heartInterval: 30000,
         }],
-        plugins: [],
       },
     };
     const loaded = loadOneBotConfig(partialConfig);
@@ -141,11 +140,40 @@ describe('NapCat Configuration Loaders', () => {
           heartInterval: 30000,
           verifyCertificate: false,
         }],
-        plugins: [],
       },
     };
     const loaded = loadOneBotConfig(partialConfig);
     expect(loaded.network.websocketClients[0]?.verifyCertificate).toBe(false);
+  });
+
+  test.each([
+    { name: 'OneBot runtime', load: loadOneBotConfig },
+    { name: 'WebUI', load: loadWebUIConfig },
+  ])('$name should ignore legacy plugin settings and preserve WSS configuration', ({ load }) => {
+    const defaults = loadOneBotConfig({});
+    const client = {
+      name: 'existing-client',
+      enable: true,
+      url: 'wss://example.com/onebot',
+      token: 'existing-token',
+      messagePostFormat: 'array',
+      reportSelfMessage: false,
+      reconnectInterval: 5000,
+      heartInterval: 30000,
+      debug: false,
+    };
+    const legacy = {
+      ...defaults,
+      network: {
+        ...defaults.network,
+        websocketClients: [client],
+        plugins: [{ name: 'legacy-plugin', enable: true }],
+      },
+    };
+    const loaded = load(legacy);
+    expect(loaded.network).not.toHaveProperty('plugins');
+    expect(loaded.network.websocketClients).toHaveLength(1);
+    expect(loaded.network.websocketClients[0]).toMatchObject(client);
   });
 
   test('NapcatConfig should compile and apply defaults', () => {

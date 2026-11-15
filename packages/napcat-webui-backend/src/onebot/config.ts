@@ -61,21 +61,12 @@ const WebsocketClientConfigSchema = Type.Object({
   heartInterval: Type.Number({ default: 30000 }),
 });
 
-const PluginConfigSchema = Type.Object({
-  name: Type.String({ default: 'plugin' }),
-  enable: Type.Boolean({ default: false }),
-  messagePostFormat: Type.String({ default: 'array' }),
-  reportSelfMessage: Type.Boolean({ default: false }),
-  debug: Type.Boolean({ default: false }),
-});
-
 const NetworkConfigSchema = Type.Object({
   httpServers: Type.Array(HttpServerConfigSchema, { default: [] }),
   httpSseServers: Type.Array(HttpSseServerConfigSchema, { default: [] }),
   httpClients: Type.Array(HttpClientConfigSchema, { default: [] }),
   websocketServers: Type.Array(WebsocketServerConfigSchema, { default: [] }),
   websocketClients: Type.Array(WebsocketClientConfigSchema, { default: [] }),
-  plugins: Type.Array(PluginConfigSchema, { default: [] }),
 }, { default: {} });
 
 const TimeoutConfigSchema = Type.Object({
@@ -100,9 +91,8 @@ export type HttpSseServerConfig = Static<typeof HttpSseServerConfigSchema>;
 export type HttpClientConfig = Static<typeof HttpClientConfigSchema>;
 export type WebsocketServerConfig = Static<typeof WebsocketServerConfigSchema>;
 export type WebsocketClientConfig = Static<typeof WebsocketClientConfigSchema>;
-export type PluginConfig = Static<typeof PluginConfigSchema>;
 
-export type NetworkAdapterConfig = HttpServerConfig | HttpSseServerConfig | HttpClientConfig | WebsocketServerConfig | WebsocketClientConfig | PluginConfig;
+export type NetworkAdapterConfig = HttpServerConfig | HttpSseServerConfig | HttpClientConfig | WebsocketServerConfig | WebsocketClientConfig;
 export type NetworkConfigKey = keyof OneBotConfig['network'];
 
 export function loadConfig (config: Partial<OneBotConfig>): OneBotConfig {

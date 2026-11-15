@@ -14,10 +14,8 @@ import { LogRouter } from '@/napcat-webui-backend/src/router/Log';
 import { BaseRouter } from '@/napcat-webui-backend/src/router/Base';
 import { FileRouter } from './File';
 import { WebUIConfigRouter } from './WebUIConfig';
-import { UpdateNapCatRouter } from './UpdateNapCat';
 import DebugRouter from '@/napcat-webui-backend/src/api/Debug';
 import { ProcessRouter } from './Process';
-import { PluginRouter } from './Plugin';
 import { MirrorRouter } from './Mirror';
 import { NapCatConfigRouter } from './NapCatConfig';
 
@@ -44,14 +42,10 @@ router.use('/Log', LogRouter);
 router.use('/File', FileRouter);
 // router:WebUI配置相关路由
 router.use('/WebUIConfig', WebUIConfigRouter);
-// router:更新NapCat相关路由
-router.use('/UpdateNapCat', UpdateNapCatRouter);
 // router:调试相关路由
 router.use('/Debug', DebugRouter);
 // router:进程管理相关路由
 router.use('/Process', ProcessRouter);
-// router:插件管理相关路由
-router.use('/Plugin', PluginRouter);
 // router:镜像管理相关路由
 router.use('/Mirror', MirrorRouter);
 // router:NapCat配置相关路由

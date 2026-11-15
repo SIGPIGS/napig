@@ -43,10 +43,6 @@ vi.mock('@/napcat-onebot/network/http-server-sse', () => ({
   OB11HttpSSEServerAdapter: class {},
 }));
 
-vi.mock('@/napcat-onebot/network/plugin-manger', () => ({
-  OB11PluginMangerAdapter: class {},
-}));
-
 vi.mock('@/napcat-onebot/api/file', () => ({
   OneBotFileApi: class {},
 }));

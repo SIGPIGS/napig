@@ -29,8 +29,7 @@
         "heartInterval": 30000
       }
     ],
-    "websocketClients": [],
-    "plugins": []
+    "websocketClients": []
   },
   "musicSignUrl": "",
   "enableLocalFile2Url": false,

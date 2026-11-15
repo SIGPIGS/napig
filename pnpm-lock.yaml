@@ -244,16 +244,6 @@ importers:
         specifier: ^1.6.7
         version: 1.6.7
 
-  packages/napcat-plugin-builtin:
-    dependencies:
-      napcat-types:
-        specifier: 0.0.16
-        version: 0.0.16
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.1
-        version: 22.19.1
-
   packages/napcat-protobuf:
     dependencies:
       '@protobuf-ts/runtime':
@@ -2882,9 +2872,6 @@ packages:
 
   '@sinclair/typebox@0.34.41':
     resolution: {integrity: sha512-6gS8pZzSXdyRHTIqoqSVknxolr1kzfy4/CeDnrzsVz8TTIWUbOBr6gnzOmTYJ3eXQNh4IYHIGi5aIL7sOZ2G/g==}
-
-  '@sinclair/typebox@0.34.48':
-    resolution: {integrity: sha512-kKJTNuK3AQOrgjjotVxMrCn1sUJwM76wMszfq1kdU4uYVJjvEWuFQ6HgvLt4Xz3fSmZlTOxJ/Ie13KnIcWQXFA==}
 
   '@so-ric/colorspace@1.1.6':
     resolution: {integrity: sha512-/KiKkpHNOBgkFJwu9sh48LkHSMYGyuTcSFK/qMBdnOAlrRJzRSXAOFB5qwzaVQuDl8wAvHVMkaASQDReTahxuw==}
@@ -5549,9 +5536,6 @@ packages:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
-
-  napcat-types@0.0.16:
-    resolution: {integrity: sha512-y3qhpdd16ATsMp4Jf88XwisFBVKqY+XSfvGX1YqMEasVFTNXeKr1MZrIzhHMkllW1QJZXAI8iNGVJO1gkHEtLQ==}
 
   napcat.protobuf@1.1.4:
     resolution: {integrity: sha512-z7XtLSBJ/PxmYb0VD/w+eYr/X3LyGz+SZ2QejFTOczwt6zWNxy2yV1mTMTvJoc3BWkI3ESVFRxkuT6+pj1tb1Q==}
@@ -9734,8 +9718,6 @@ snapshots:
 
   '@sinclair/typebox@0.34.41': {}
 
-  '@sinclair/typebox@0.34.48': {}
-
   '@so-ric/colorspace@1.1.6':
     dependencies:
       color: 5.0.2
@@ -12887,11 +12869,6 @@ snapshots:
   nan@2.24.0: {}
 
   nanoid@3.3.11: {}
-
-  napcat-types@0.0.16:
-    dependencies:
-      '@sinclair/typebox': 0.34.48
-      '@types/node': 22.19.1
 
   napcat.protobuf@1.1.4:
     dependencies:

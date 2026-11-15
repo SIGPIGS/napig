@@ -5,13 +5,11 @@ import { MdError } from 'react-icons/md';
 
 import IconWrapper from '@/components/github_info/icon_wrapper';
 import ItemCounter from '@/components/github_info/item_counter';
-import GithubRelease from '@/components/github_info/release';
 import {
   BookIcon,
   BugIcon,
   PullRequestIcon,
   StarIcon,
-  TagIcon,
   UsersIcon,
   WatchersIcon,
 } from '@/components/icons';
@@ -23,7 +21,6 @@ import type {
   GirhubRepo,
   GithubContributor,
   GithubPullRequest,
-  GithubRelease as GithubReleaseType,
 } from '@/types/github';
 
 function displayData (data: number, loading: boolean, error?: Error) {
@@ -46,17 +43,6 @@ export default function NapCatRepoInfo () {
     loading: repoLoading,
   } = useRequest(() =>
     request.get<GirhubRepo>('https://api.github.com/repos/NapNeko/NapCatQQ')
-  );
-
-  // release info
-  const {
-    data: releaseOriData,
-    error: releaseError,
-    loading: releaseLoading,
-  } = useRequest(() =>
-    request.get<GithubReleaseType[]>(
-      'https://api.github.com/repos/NapNeko/NapCatQQ/releases'
-    )
   );
 
   // pr info
@@ -82,11 +68,8 @@ export default function NapCatRepoInfo () {
   );
 
   const repoData = repoOriData?.data;
-  const releaseData = releaseOriData?.data?.[0];
   const prCount = prData?.data?.length || 0;
   const contributorsCount = contributorsData?.data?.length || 0;
-
-  const releaseCount = releaseOriData?.data?.length || 0;
 
   return (
     <Listbox
@@ -97,9 +80,6 @@ export default function NapCatRepoInfo () {
       }}
       onAction={(key: React.Key) => {
         switch (key) {
-          case 'releases':
-            openUrl('https://github.com/NapNeko/NapCatQQ/releases', true);
-            break;
           case 'contributors':
             openUrl(
               'https://github.com/NapNeko/NapCatQQ/graphs/contributors',
@@ -169,31 +149,6 @@ export default function NapCatRepoInfo () {
         }
       >
         Pull Requests
-      </ListboxItem>
-      <ListboxItem
-        key='releases'
-        className='group h-auto py-3'
-        endContent={
-          releaseError
-            ? (
-              <MdError className='text-primary-400' />
-            )
-            : releaseLoading
-              ? (
-                <Spinner size='sm' />
-              )
-              : (
-                <ItemCounter number={releaseCount} />
-              )
-        }
-        startContent={
-          <IconWrapper className='bg-primary/10 text-primary'>
-            <TagIcon className='text-lg' />
-          </IconWrapper>
-        }
-        textValue='Releases'
-      >
-        {releaseData && <GithubRelease releaseData={releaseData} />}
       </ListboxItem>
       <ListboxItem
         key='contributors'

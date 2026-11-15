@@ -11,7 +11,6 @@ import { InstanceContext, loadQQWrapper, NapCatCore, NapCatCoreWorkingEnv, NodeI
 import { proxiedListenerOf } from '@/napcat-core/helper/proxy-handler';
 import { createOfflineRecovery } from '@/napcat-core/helper/offline-recovery';
 import { statusHelperSubscription } from '@/napcat-core/helper/status';
-import { applyPendingUpdates } from '@/napcat-webui-backend/src/api/UpdateNapCat';
 import { WebUiDataRuntime } from '@/napcat-webui-backend/src/helper/Data';
 import { NapProtoMsg } from 'napcat-protobuf';
 import { OidbSvcTrpcTcpBase, OidbSvcTrpcTcp0XCDE_2RespBody } from '@/napcat-core/packet/transformer/proto';
@@ -41,7 +40,6 @@ export async function NCoreInitFramework (
   const pathWrapper = new NapCatPathWrapper();
 
   const logger = new LogWrapper(pathWrapper.logsPath);
-  await applyPendingUpdates(pathWrapper, logger);
   const basicInfoWrapper = new QQBasicInfoWrapper({ logger });
   const wrapper = loadQQWrapper(basicInfoWrapper.QQMainPath, basicInfoWrapper.getFullQQVersion());
   const nativePacketHandler = new NativePacketHandler({ logger }); // 初始化 NativePacketHandler 用于后续使用
