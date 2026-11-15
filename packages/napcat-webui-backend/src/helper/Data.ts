@@ -26,7 +26,7 @@ const LoginRuntime: LoginRuntimeType = {
 
   },
   onRefreshQRCode: async () => {
-    // 默认空实现，由 shell 注册真实回调
+    throw new Error('QQ 登录服务尚未初始化，请稍后重试');
   },
   NapCatHelper: {
     onOB11ConfigChanged: async () => {
@@ -248,9 +248,18 @@ export const WebUiDataRuntime = {
 
   refreshQRCode: async function () {
     const previousQRCodeUrl = LoginRuntime.QQQRCodeURL;
+    const previousPhase = LoginRuntime.QQLoginPhase;
     LoginRuntime.QQLoginError = '';
     LoginRuntime.QQLoginPhase = 'generating_qrcode';
-    await LoginRuntime.onRefreshQRCode();
+    try {
+      await LoginRuntime.onRefreshQRCode();
+    } catch (error) {
+      if (LoginRuntime.QQLoginPhase === 'generating_qrcode') {
+        LoginRuntime.QQLoginPhase = previousPhase;
+      }
+      LoginRuntime.QQLoginError = (error as Error).message;
+      throw error;
+    }
 
     const refreshTimeout = 10_000;
     const deadline = Date.now() + refreshTimeout;

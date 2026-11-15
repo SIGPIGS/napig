@@ -108,14 +108,17 @@ async function initializeLoginService (
   });
 }
 
-async function handleLogin (
+function prepareLogin (
   loginService: NodeIKernelLoginService,
   logger: LogWrapper,
-  pathWrapper: NapCatPathWrapper,
-  quickLoginUin: string | undefined,
-  historyLoginList: LoginListItem[]
-): Promise<SelfInfo> {
+  pathWrapper: NapCatPathWrapper
+) {
   const context = { isLogined: false, loginFlowInitialized: false };
+  let startupReady = false;
+  let loginServiceConnected = false;
+  let loginFlowRunning = false;
+  let quickLoginUin: string | undefined;
+  let historyLoginList: LoginListItem[] = [];
   let inner_resolve: (value: SelfInfo) => void;
   const selfInfo: Promise<SelfInfo> = new Promise((resolve) => {
     inner_resolve = resolve;
@@ -125,11 +128,33 @@ async function handleLogin (
   const connection = new Promise<void>((resolve) => {
     resolveConnection = resolve;
   });
-  runStartupStep(logger, 'connectLoginService', () => connection).catch(() => {
-    const message = `QQ 登录服务连接超时（MSF 状态 ${loginService.getMsfStatus()}），请检查网络和 QQ 代理配置`;
-    WebUiDataRuntime.setQQLoginError(message);
-    WebUiDataRuntime.setQQLoginPhase('offline');
-  });
+
+  // Native QQ can connect while getLoginList() is pending. Record the event now,
+  // but defer login actions until initialization and the history read are complete.
+  const advanceLogin = async () => {
+    if (!startupReady || !loginServiceConnected) return;
+    resolveConnection();
+    if (context.isLogined || loginFlowRunning) return;
+    loginFlowRunning = true;
+    try {
+      await waitForNetworkConnection(loginService, logger);
+      if (!loginServiceConnected || context.isLogined) return;
+      if (!context.loginFlowInitialized) {
+        context.loginFlowInitialized = true;
+        await handleLoginInner(context, logger, loginService, quickLoginUin, historyLoginList);
+        return;
+      }
+      WebUiDataRuntime.setQQLoginPhase('generating_qrcode');
+      const requested = loginService.getQRCodePicture();
+      logger.logWarn('[Core] [Login] 登录服务重连完成，正在获取二维码', { requested, msfStatus: loginService.getMsfStatus() });
+    } catch (e) {
+      logger.logError(e);
+      WebUiDataRuntime.setQQLoginError(`QQ 登录服务初始化失败: ${(e as Error).message}`);
+      WebUiDataRuntime.setQQLoginPhase('offline');
+    } finally {
+      loginFlowRunning = false;
+    }
+  };
 
   const loginListener = new NodeIKernelLoginListener();
   loginListener.onUserLoggedIn = (userid: string) => {
@@ -156,6 +181,7 @@ async function handleLogin (
     });
   };
   loginListener.onLoginDisConnected = () => {
+    loginServiceConnected = false;
     context.isLogined = false;
     WebUiDataRuntime.setQQLoginStatus(false);
     WebUiDataRuntime.setQQLoginPhase('offline');
@@ -167,25 +193,11 @@ async function handleLogin (
     WebUiDataRuntime.setQQLoginPhase('offline');
   };
   loginListener.onLoginConnected = () => {
-    resolveConnection();
+    if (loginServiceConnected) return;
+    loginServiceConnected = true;
     WebUiDataRuntime.setQQLoginError('');
-    logger.log('[Core] [Login] onLoginConnected', { msfStatus: loginService.getMsfStatus() });
-    waitForNetworkConnection(loginService, logger).then(async () => {
-      if (!context.loginFlowInitialized) {
-        context.loginFlowInitialized = true;
-        await handleLoginInner(context, logger, loginService, quickLoginUin, historyLoginList);
-        return;
-      }
-      if (!context.isLogined) {
-        WebUiDataRuntime.setQQLoginPhase('generating_qrcode');
-        const requested = loginService.getQRCodePicture();
-        logger.logWarn('[Core] [Login] 登录服务重连完成，正在获取二维码', { requested, msfStatus: loginService.getMsfStatus() });
-      }
-    }).catch(e => {
-      logger.logError(e);
-      WebUiDataRuntime.setQQLoginError(`QQ 登录服务初始化失败: ${(e as Error).message}`);
-      WebUiDataRuntime.setQQLoginPhase('offline');
-    });
+    logger.log('[Core] [Login] onLoginConnected', { msfStatus: loginService.getMsfStatus(), startupReady });
+    advanceLogin();
   };
   loginListener.onLoginConnecting = () => {
     logger.log('[Core] [Login] onLoginConnecting', { msfStatus: loginService.getMsfStatus() });
@@ -235,11 +247,47 @@ async function handleLogin (
     WebUiDataRuntime.setQQLoginError(`登录失败: ${errInfo}`);
   };
 
+  // Register refresh alongside the listener, including during early startup.
+  WebUiDataRuntime.setRefreshQRCodeCallback(async () => {
+    if (!startupReady || !loginServiceConnected || !context.loginFlowInitialized) {
+      throw new Error('QQ 登录服务尚未就绪，请稍后重试');
+    }
+    context.isLogined = false;
+    const msfStatus = loginService.getMsfStatus();
+    if (msfStatus === 2) {
+      // KickedOffLine 会在后台负责重启 Worker。这里不能重启：该回调由
+      // RefreshQRcode HTTP 请求触发，重启会中断正在等待响应的请求。
+      WebUiDataRuntime.setQQLoginPhase('reconnecting');
+      throw new Error('QQ_LOGIN_SERVICE_RESTARTING');
+    }
+    const requested = loginService.getQRCodePicture();
+    logger.logWarn('[Core] [Login] 请求刷新二维码', { requested, msfStatus });
+    if (!requested) {
+      throw new Error('QQ 未接受二维码刷新请求');
+    }
+  });
+
   loginService.addKernelLoginListener(proxiedListenerOf(loginListener, logger));
-  logger.log('[Core] [Login] listener registered, connecting');
-  const connected = loginService.connect();
-  logger.log('[Core] [Login] connect returned', { connected, msfStatus: loginService.getMsfStatus() });
-  return await selfInfo;
+  logger.log('[Core] [Login] listener registered before initialization');
+  return {
+    start: async (uin: string | undefined, history: LoginListItem[]): Promise<SelfInfo> => {
+      quickLoginUin = uin;
+      historyLoginList = history;
+      startupReady = true;
+      runStartupStep(logger, 'connectLoginService', () => connection).catch(() => {
+        WebUiDataRuntime.setQQLoginError(`QQ 登录服务连接等待超时：未收到连接完成事件（MSF 状态 ${loginService.getMsfStatus()}）`);
+        WebUiDataRuntime.setQQLoginPhase('offline');
+      });
+      if (loginServiceConnected) {
+        logger.log('[Core] [Login] 登录服务已在初始化期间连接，继续登录流程');
+        advanceLogin();
+      } else {
+        const connected = loginService.connect();
+        logger.log('[Core] [Login] connect returned', { connected, msfStatus: loginService.getMsfStatus() });
+      }
+      return await selfInfo;
+    },
+  };
 }
 async function handleLoginInner (context: { isLogined: boolean; loginFlowInitialized: boolean; }, logger: LogWrapper, loginService: NodeIKernelLoginService, quickLoginUin: string | undefined, historyLoginList: LoginListItem[]) {
   const resolveQuickPasswordMd5 = (): string | undefined => {
@@ -259,23 +307,6 @@ async function handleLoginInner (context: { isLogined: boolean; loginFlowInitial
 
     return undefined;
   };
-
-  // 注册刷新二维码回调
-  WebUiDataRuntime.setRefreshQRCodeCallback(async () => {
-    context.isLogined = false;
-    const msfStatus = loginService.getMsfStatus();
-    if (msfStatus === 2) {
-      // KickedOffLine 会在后台负责重启 Worker。这里不能重启：该回调由
-      // RefreshQRcode HTTP 请求触发，重启会中断正在等待响应的请求。
-      WebUiDataRuntime.setQQLoginPhase('reconnecting');
-      throw new Error('QQ_LOGIN_SERVICE_RESTARTING');
-    }
-    const requested = loginService.getQRCodePicture();
-    logger.logWarn('[Core] [Login] 请求刷新二维码', { requested, msfStatus });
-    if (!requested) {
-      throw new Error('QQ 未接受二维码刷新请求');
-    }
-  });
 
   WebUiDataRuntime.setQuickLoginCall(async (uin: string) => {
     return await new Promise((resolve) => {
@@ -716,6 +747,7 @@ export async function NCoreInitShell () {
   InitWebUi(logger, pathWrapper, logSubscription, statusHelperSubscription).then().catch(e => logger.logError(e));
   const engine = wrapper.NodeIQQNTWrapperEngine.get();
   const loginService = wrapper.NodeIKernelLoginService.get();
+  const login = prepareLogin(loginService, logger, pathWrapper);
   let session: NodeIQQNTWrapperSession;
   let startupSession: NodeIQQNTStartupSessionWrapper | null = null;
   try {
@@ -757,7 +789,7 @@ export async function NCoreInitShell () {
   const dataTimestape = new Date().getTime().toString();
   o3Service.reportAmgomWeather('login', 'a1', [dataTimestape, '0', '0']);
 
-  const selfInfo = await handleLogin(loginService, logger, pathWrapper, quickLoginUin, historyLoginList);
+  const selfInfo = await login.start(quickLoginUin, historyLoginList);
 
   // 登录成功后通知 Master 进程（用于切换崩溃重试策略）
   if (typeof process.send === 'function') {
