@@ -1,3 +1,10 @@
+export interface OfflineRecoveryDiagnostic {
+  event: 'scheduled' | 'duplicate' | 'expedited' | 'self-recovered' | 'restart-requested' | 'restart-result';
+  allowSelfRecovery: boolean;
+  delayMs?: number;
+  accepted?: boolean;
+}
+
 export interface OfflineRecoveryOptions {
   // 当前账号是否在线
   isOnline: () => boolean;
@@ -7,6 +14,7 @@ export interface OfflineRecoveryOptions {
   onRecovered: () => void;
   // 重启 Worker；返回 false 或抛错表示失败，之后可以再次触发
   restart: (tips: string) => Promise<boolean>;
+  onDiagnostic?: (diagnostic: OfflineRecoveryDiagnostic) => void;
   // 被踢下线后多久重启。常规状态轮询为 3 秒，留出一个轮询周期，确保浏览器先清除旧二维码
   kickedDelayMs?: number;
   // 静默离线后多久重启。网络短暂断开时 QQ 也可能报离线，先给它自己重连的机会，
@@ -23,6 +31,7 @@ export function createOfflineRecovery ({
   onOffline,
   onRecovered,
   restart,
+  onDiagnostic,
   kickedDelayMs = 3_500,
   selfOfflineDelayMs = 60_000,
 }: OfflineRecoveryOptions) {
@@ -34,22 +43,31 @@ export function createOfflineRecovery ({
 
     if (restartRequested) {
       // 被踢时离线状态可能先到：还在等静默离线自行恢复的话，不用再等了
-      if (allowSelfRecovery || !selfRecoveryTimer) return;
+      if (allowSelfRecovery || !selfRecoveryTimer) {
+        onDiagnostic?.({ event: 'duplicate', allowSelfRecovery });
+        return;
+      }
       clearTimeout(selfRecoveryTimer);
+      onDiagnostic?.({ event: 'expedited', allowSelfRecovery });
     }
     restartRequested = true;
+    onDiagnostic?.({ event: 'scheduled', allowSelfRecovery, delayMs: allowSelfRecovery ? selfOfflineDelayMs : kickedDelayMs });
     // 不在 RefreshQRcode 请求里直接重启 Worker，否则请求在返回前就被中断，
     // 浏览器只能得到 ERR_EMPTY_RESPONSE；延后调度也让前端先看到「二维码已清空、正在恢复」
     const timer = setTimeout(() => {
       selfRecoveryTimer = undefined;
       if (allowSelfRecovery && isOnline()) {
         restartRequested = false;
+        onDiagnostic?.({ event: 'self-recovered', allowSelfRecovery });
         onRecovered();
         return;
       }
+      onDiagnostic?.({ event: 'restart-requested', allowSelfRecovery });
       restart(tips).then((ok) => {
+        onDiagnostic?.({ event: 'restart-result', allowSelfRecovery, accepted: ok });
         if (!ok) restartRequested = false;
       }, () => {
+        onDiagnostic?.({ event: 'restart-result', allowSelfRecovery, accepted: false });
         restartRequested = false;
       });
     }, allowSelfRecovery ? selfOfflineDelayMs : kickedDelayMs);

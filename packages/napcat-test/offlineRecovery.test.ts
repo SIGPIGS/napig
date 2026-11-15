@@ -9,13 +9,15 @@ function setup (restartResult: boolean | Error = true) {
     if (restartResult instanceof Error) throw restartResult;
     return restartResult;
   });
+  const onDiagnostic = vi.fn();
   const handleOffline = createOfflineRecovery({
     isOnline: () => state.online,
     onOffline,
     onRecovered,
     restart,
+    onDiagnostic,
   });
-  return { state, onOffline, onRecovered, restart, handleOffline };
+  return { state, onOffline, onRecovered, restart, handleOffline, onDiagnostic };
 }
 
 describe('offline recovery', () => {
@@ -62,7 +64,7 @@ describe('offline recovery', () => {
   });
 
   test('a kick during the silent-offline wait restarts without waiting the full minute', async () => {
-    const { restart, handleOffline } = setup();
+    const { restart, handleOffline, onDiagnostic } = setup();
     handleOffline('silent', true);
     await vi.advanceTimersByTimeAsync(1_000);
     handleOffline('kicked', false);
@@ -72,6 +74,13 @@ describe('offline recovery', () => {
     expect(restart).toHaveBeenCalledWith('kicked');
     await vi.advanceTimersByTimeAsync(120_000);
     expect(restart).toHaveBeenCalledTimes(1);
+    expect(onDiagnostic.mock.calls.map(([event]) => event)).toEqual([
+      { event: 'scheduled', allowSelfRecovery: true, delayMs: 60_000 },
+      { event: 'expedited', allowSelfRecovery: false },
+      { event: 'scheduled', allowSelfRecovery: false, delayMs: 3_500 },
+      { event: 'restart-requested', allowSelfRecovery: false },
+      { event: 'restart-result', allowSelfRecovery: false, accepted: true },
+    ]);
   });
 
   test('repeated offline events schedule only one restart', async () => {

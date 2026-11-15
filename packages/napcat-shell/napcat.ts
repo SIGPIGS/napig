@@ -5,6 +5,7 @@ import { connectToNamedPipe } from './pipe';
 import { WebUiDataRuntime } from '@/napcat-webui-backend/src/helper/Data';
 import { webUiRuntimePort } from '@/napcat-webui-backend/index';
 import { createSessionRecoveryBudget } from './session-recovery';
+import { getLoginDiagnostics } from '@/napcat-core/helper/login-diagnostics';
 import { createProcessManager, type IProcessManager, type IWorkerProcess } from './process-api';
 import path from 'path';
 import fs from 'fs';
@@ -119,6 +120,12 @@ function forceKillProcess (pid: number): void {
  * 重启 Worker 进程
  */
 export async function restartWorker (port?: number, expiredReason?: string): Promise<void> {
+  logger.logWarn('[NapCat] [Process] Worker重启请求', {
+    ...getLoginDiagnostics(),
+    workerPid: currentWorker?.pid,
+    alreadyRestarting: isRestarting,
+    sessionExpired: !!expiredReason,
+  });
   if (expiredReason && !sessionExpiredReason) {
     sessionExpiredReason = expiredReason;
     allowRecoveryQuickLogin = requestAutomaticRecovery();
@@ -222,6 +229,8 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
 
   allowRecoveryQuickLogin = false;
   currentWorker = child;
+  const workerStartedAt = performance.now();
+  let workerPid = child.pid;
 
   // 监听标准输出（直接转发）
   if (child.stdout) {
@@ -249,13 +258,27 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
         });
       } else if (message.type === 'login-success') {
         sessionExpiredReason = '';
-        logger.log(`[NapCat] [${processType}] Worker进程已登录成功，切换到正常重试策略`);
+        logger.log(`[NapCat] [${processType}] Worker进程已登录成功，切换到正常重试策略`, {
+          ...getLoginDiagnostics(),
+          workerPid,
+          workerAgeMs: Math.round(performance.now() - workerStartedAt),
+        });
       }
     }
   });
 
   // 监听子进程退出
-  child.on('exit', (code: unknown) => {
+  child.on('exit', (code: unknown, signal: unknown) => {
+    logger.logWarn(`[NapCat] [${processType}] Worker退出诊断`, {
+      ...getLoginDiagnostics(),
+      workerPid,
+      workerAgeMs: Math.round(performance.now() - workerStartedAt),
+      exitCode: typeof code === 'number' ? code : null,
+      signal: typeof signal === 'string' ? signal : null,
+      isRestarting,
+      isShuttingDown,
+      currentWorker: currentWorker === child,
+    });
     const exitCode = typeof code === 'number' ? code : 0;
     if (exitCode !== 0) {
       logger.logError(`[NapCat] [${processType}] Worker进程退出，退出码: ${exitCode}`);
@@ -289,6 +312,17 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
   await new Promise<void>((resolve, reject) => {
     const onSpawn = () => {
       child.off('error', onError);
+      // UtilityProcess.pid can be unavailable before spawn or after exit.
+      workerPid = child.pid;
+      logger.log('[NapCat] [Process] Worker已创建', {
+        ...getLoginDiagnostics(),
+        workerPid,
+        processType,
+        passQuickLogin,
+        recoveryQuickLogin,
+        hasQuickLoginArgument: workerArgs.length > 0,
+        sessionExpired: !!sessionExpiredReason,
+      });
       resolve();
     };
     const onError = (...args: unknown[]) => {

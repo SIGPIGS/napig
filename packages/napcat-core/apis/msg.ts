@@ -263,7 +263,9 @@ export class NTQQMsgApi {
         new Map(),
       ],
       (ret) => {
-        if (isSessionExpiredResult(ret)) this.core.expireSession('QQ 登录身份已失效，请重新登录');
+        if (isSessionExpiredResult(ret)) {
+          this.core.expireSession('QQ 登录身份已失效，请重新登录', { operation: 'sendMsg', result: ret.result });
+        }
         return ret.result === 0;
       },
       msgRecords => {

@@ -45,6 +45,7 @@ import { getDataPaths } from './data-path';
 import { connectToNamedPipe } from './pipe';
 import { runStartupStep } from './startup-step';
 import { createQuickLoginFlow } from './quick-login';
+import { getLoginDiagnostics } from '@/napcat-core/helper/login-diagnostics';
 
 // NapCat Shell App ES 入口文件
 async function handleUncaughtExceptions (logger: LogWrapper) {
@@ -160,6 +161,14 @@ function prepareLogin (
   let startupReady = false;
   let loginServiceConnected = false;
   let loginFlowRunning = false;
+  const diagnostics = () => ({
+    ...getLoginDiagnostics(() => loginService.getMsfStatus()),
+    startupReady,
+    loginServiceConnected,
+    loginFlowRunning,
+    isLogined: context.isLogined,
+    loginPhase: WebUiDataRuntime.getQQLoginPhase(),
+  });
   let quickLoginUin: string | undefined;
   let historyLoginList: LoginListItem[] = [];
   let inner_resolve: (value: SelfInfo) => void;
@@ -207,6 +216,7 @@ function prepareLogin (
   };
   loginListener.onQRCodeLoginSucceed = async (loginResult) => {
     if (WebUiDataRuntime.getOneBotContext()?.core?.sessionExpiredReason || WebUiDataRuntime.getQQLoginPhase() === 'qrcode_failed') return;
+    logger.log('[Core] [Login] 原生登录成功通知', diagnostics());
     WebUiDataRuntime.setQQSessionExpiredReason('');
     process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] = '0';
     context.cancelQuickLogin?.();
@@ -228,6 +238,7 @@ function prepareLogin (
     });
   };
   loginListener.onLoginDisConnected = () => {
+    logger.logWarn('[Core] [Login] onLoginDisConnected', diagnostics());
     context.cancelQuickLogin?.();
     loginServiceConnected = false;
     context.isLogined = false;
@@ -236,6 +247,7 @@ function prepareLogin (
     logger.logWarn('[Core] [Login] 登录服务已断开，将允许重新获取二维码');
   };
   loginListener.onLogoutSucceed = () => {
+    logger.logWarn('[Core] [Login] onLogoutSucceed', diagnostics());
     context.cancelQuickLogin?.();
     context.isLogined = false;
     WebUiDataRuntime.setQQLoginStatus(false);
@@ -245,11 +257,11 @@ function prepareLogin (
     if (loginServiceConnected) return;
     loginServiceConnected = true;
     WebUiDataRuntime.setQQLoginError('');
-    logger.log('[Core] [Login] onLoginConnected', { msfStatus: loginService.getMsfStatus(), startupReady });
+    logger.log('[Core] [Login] onLoginConnected', diagnostics());
     advanceLogin();
   };
   loginListener.onLoginConnecting = () => {
-    logger.log('[Core] [Login] onLoginConnecting', { msfStatus: loginService.getMsfStatus() });
+    logger.log('[Core] [Login] onLoginConnecting', diagnostics());
   };
   loginListener.onQRCodeGetPicture = ({ pngBase64QrcodeData, qrcodeUrl }) => {
     if (['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
@@ -290,7 +302,7 @@ function prepareLogin (
 
   loginListener.onQRCodeSessionFailed = (errType: number, errCode: number) => {
     if (!context.isLogined && !['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) {
-      logger.logError('[Core] [Login] Login Error,ErrType: ', errType, ' ErrCode:', errCode);
+      logger.logError('[Core] [Login] Login Error,ErrType: ', errType, ' ErrCode:', errCode, diagnostics());
       if (errType === 1 && errCode === 5) {
         WebUiDataRuntime.setQQLoginStatus(false);
         WebUiDataRuntime.setQQLoginQrcodeURL('');
@@ -385,8 +397,10 @@ async function handleLoginInner (context: LoginContext, logger: LogWrapper, logi
   const quickLogin = createQuickLoginFlow({
     login: uin => loginService.quickLoginWithUin(uin),
     onResponse: response => logger.log('[Core] [Login] 快速登录返回', {
+      ...getLoginDiagnostics(() => loginService.getMsfStatus()),
       result: response.result,
       step: response.loginErrorInfo?.step,
+      loginPhase: WebUiDataRuntime.getQQLoginPhase(),
     }),
     onWaiting: () => {
       WebUiDataRuntime.setQQLoginQrcodeURL('');
@@ -977,6 +991,13 @@ export class NapCatShell {
     // 下线和身份失效共用恢复调度；主进程限制身份失效后的快速登录次数。
     const handleOffline = createOfflineRecovery({
       isOnline: () => this.core.isOnline,
+      onDiagnostic: diagnostic => this.context.logger.logWarn('[Core] [OfflineRecovery]', {
+        ...getLoginDiagnostics(() => this.context.session.getMSFService().getMsfStatus()),
+        ...diagnostic,
+        online: this.core.isOnline,
+        sessionExpired: !!this.core.sessionExpiredReason,
+        loginPhase: WebUiDataRuntime.getQQLoginPhase(),
+      }),
       onOffline: (tips) => {
         if (this.core.sessionExpiredReason) WebUiDataRuntime.setQQSessionExpiredReason(this.core.sessionExpiredReason);
         WebUiDataRuntime.setQQLoginStatus(false);

@@ -1,4 +1,5 @@
 import { QQSessionValidity } from './helper/session-validity';
+import { getLoginDiagnostics } from './helper/login-diagnostics';
 import {
   NTQQFileApi,
   NTQQFriendApi,
@@ -153,8 +154,13 @@ export class NapCatCore {
     this.selfInfo.online = this.sessionValidity.isOnline(online);
   }
 
-  expireSession (reason: string): void {
+  expireSession (reason: string, source?: { operation: string; result: number; }): void {
     if (!this.sessionValidity.expire(reason)) return;
+    this.context.logger.logError('[Core] [SessionExpired] diagnostics', {
+      ...getLoginDiagnostics(() => this.context.session.getMSFService().getMsfStatus()),
+      wasOnline: this.selfInfo.online,
+      ...source,
+    });
     this.selfInfo.online = false;
     this.context.logger.logError('[Core] [SessionExpired]', this.sessionExpiredReason);
     this.event.emit('SessionExpired', this.sessionExpiredReason);
@@ -284,7 +290,15 @@ export class NapCatCore {
     msgListener.onKickedOffLine = (Info: KickedOffLineInfo) => {
       // 下线通知
       const tips = `[KickedOffLine] [${Info.tipsTitle}] ${Info.tipsDesc}`;
-      this.context.logger.logError(tips);
+      this.context.logger.logError(tips, {
+        ...getLoginDiagnostics(() => this.context.session.getMSFService().getMsfStatus()),
+        wasOnline: this.selfInfo.online,
+        appId: Info.appId,
+        instanceId: Info.instanceId,
+        sameDevice: Info.sameDevice,
+        kickedType: Info.kickedType,
+        securityKickedType: Info.securityKickedType,
+      });
       this.selfInfo.online = false;
       this.event.emit('KickedOffLine', tips);
     };
@@ -299,6 +313,7 @@ export class NapCatCore {
     );
 
     const profileListener = new NodeIKernelProfileListener();
+    let lastNativeStatus: number | undefined;
     profileListener.onProfileDetailInfoChanged = (profile) => {
       if (profile.uid === this.selfInfo.uid) {
         Object.assign(this.selfInfo, profile);
@@ -306,6 +321,19 @@ export class NapCatCore {
       }
     };
     profileListener.onSelfStatusChanged = (Info: SelfStatusInfo) => {
+      // Status pushes may repeat frequently; retain transitions without logging every push.
+      if (lastNativeStatus !== Info.status) {
+        this.context.logger.log('[Core] [SelfStatusChanged]', {
+          ...getLoginDiagnostics(() => this.context.session.getMSFService().getMsfStatus()),
+          previousStatus: lastNativeStatus ?? null,
+          status: Info.status,
+          extStatus: Info.extStatus,
+          termType: Info.termType,
+          netType: Info.netType,
+          wasOnline: this.selfInfo.online,
+        });
+        lastNativeStatus = Info.status;
+      }
       if (Info.status === 20) {
         // 静默离线：服务端判定会话失效，但不会下发 KickedOffLine 通知。
         // 仅在 在线 -> 离线 的跳变上广播一次，供上层复用下线恢复链路。
