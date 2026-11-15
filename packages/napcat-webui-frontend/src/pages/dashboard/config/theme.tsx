@@ -19,7 +19,7 @@ import ColorPicker from '@/components/ColorPicker';
 import FileInput from '@/components/input/file_input';
 import PageLoading from '@/components/page_loading';
 
-import FileManager from '@/controllers/file_manager';
+import WebUIFont from '@/controllers/webui_font';
 import { applyFont, colorKeys, generateTheme, loadTheme, updateFontCache } from '@/utils/theme';
 
 import WebUIManager from '@/controllers/webui_manager';
@@ -215,7 +215,7 @@ const ThemeConfigCard = () => {
     setDataLoaded(true);
     setHasUnsavedChanges(false);
     // 检查自定义字体是否存在
-    FileManager.checkWebUIFontExists().then(exists => {
+    WebUIFont.checkWebUIFontExists().then(exists => {
       setCustomFontExists(exists);
     }).catch(err => console.error('Failed to check custom font:', err));
   }, [data, setOnebotValue]);
@@ -430,12 +430,12 @@ const ThemeConfigCard = () => {
                           try {
                             if (customFontExists) {
                               try {
-                                await FileManager.deleteWebUIFont();
+                                await WebUIFont.deleteWebUIFont();
                               } catch (e) {
                                 console.warn('Failed to delete existing font before upload:', e);
                               }
                             }
-                            await FileManager.uploadWebUIFont(file);
+                            await WebUIFont.uploadWebUIFont(file);
 
                             // 先自动把选择的字体模式设置为 custom，并保存配置，避免刷新后又变成了旧的/没保存的模式
                             const updatedTheme = { ...theme, fontMode: 'custom' };
@@ -453,7 +453,7 @@ const ThemeConfigCard = () => {
                         }}
                         onDelete={async () => {
                           try {
-                            await FileManager.deleteWebUIFont();
+                            await WebUIFont.deleteWebUIFont();
                             // 删除字体后，若当前选中的是自定义字体，则将其重置为系统默认（或其它）并保存，以防页面报错
                             if (theme.fontMode === 'custom') {
                               const updatedTheme = { ...theme, fontMode: 'system' };

@@ -44,7 +44,7 @@ export interface LoginListItem {
   facePath: string;
   loginType: 1; // 1是二维码登录？
   isQuickLogin: boolean; // 是否可以快速登录
-  isAutoLogin: boolean; // 是否可以自动登录
+  isAutoLogin: boolean; // 是否启用了自动登录
 }
 
 export interface QuickLoginResult {
@@ -111,7 +111,7 @@ export interface NodeIKernelLoginService {
 
   resetLoginInfo (arg: unknown): unknown;
 
-  setAutoLogin (arg: unknown): unknown;
+  setAutoLogin (enabled: boolean): unknown;
 
   setRemerberPwd (remember: boolean): unknown;
 

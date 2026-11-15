@@ -44,7 +44,6 @@ const ShellBaseConfig = (source_map: boolean = false) =>
         '@/napcat-core': resolve(__dirname, '../napcat-core'),
         '@/napcat-common': resolve(__dirname, '../napcat-common'),
         '@/napcat-onebot': resolve(__dirname, '../napcat-onebot'),
-        '@/napcat-pty': resolve(__dirname, '../napcat-pty'),
         '@/napcat-dpapi': resolve(__dirname, '../napcat-dpapi'),
         '@/napcat-webui-backend': resolve(__dirname, '../napcat-webui-backend'),
         '@/napcat-image-size': resolve(__dirname, '../napcat-image-size'),
@@ -58,7 +57,6 @@ const ShellBaseConfig = (source_map: boolean = false) =>
       lib: {
         entry: {
           napcat: path.resolve(__dirname, 'napcat.ts'),
-          'worker/conoutSocketWorker': path.resolve(__dirname, '../napcat-pty/worker/conoutSocketWorker.ts'),
         },
         formats: ['es'],
         fileName: (_, entryName) => `${entryName}.mjs`,

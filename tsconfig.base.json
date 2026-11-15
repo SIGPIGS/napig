@@ -79,9 +79,6 @@
       "napcat-webui-backend/*": [
         "./packages/napcat-webui-backend/*"
       ],
-      "napcat-pty": [
-        "./packages/napcat-pty/node-pty.d.ts"
-      ],
       "@/*": [
         "./packages/*"
       ]

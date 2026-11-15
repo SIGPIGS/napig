@@ -1,12 +1,10 @@
 import {
   LuActivity,
   LuFileText,
-  LuFolderOpen,
   LuInfo,
   LuLayoutDashboard,
   LuSettings,
   LuSignal,
-  LuTerminal,
   LuZap,
 } from 'react-icons/lu';
 
@@ -48,16 +46,6 @@ export const siteConfig = {
       label: '实时调试',
       icon: <LuZap className='w-5 h-5' />,
       href: '/debug/ws',
-    },
-    {
-      label: '文件管理',
-      icon: <LuFolderOpen className='w-5 h-5' />,
-      href: '/file_manager',
-    },
-    {
-      label: '系统终端',
-      icon: <LuTerminal className='w-5 h-5' />,
-      href: '/terminal',
     },
     {
       label: '系统配置',

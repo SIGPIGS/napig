@@ -11,7 +11,6 @@ import { QQLoginRouter } from '@/napcat-webui-backend/src/router/QQLogin';
 import { AuthRouter } from '@/napcat-webui-backend/src/router/auth';
 import { LogRouter } from '@/napcat-webui-backend/src/router/Log';
 import { BaseRouter } from '@/napcat-webui-backend/src/router/Base';
-import { FileRouter } from './File';
 import { WebUIConfigRouter } from './WebUIConfig';
 import DebugRouter from '@/napcat-webui-backend/src/api/Debug';
 import { ProcessRouter } from './Process';
@@ -34,8 +33,6 @@ router.use('/QQLogin', QQLoginRouter);
 router.use('/OB11Config', OB11ConfigRouter);
 // router:日志相关路由
 router.use('/Log', LogRouter);
-// file:文件相关路由
-router.use('/File', FileRouter);
 // router:WebUI配置相关路由
 router.use('/WebUIConfig', WebUIConfigRouter);
 // router:调试相关路由

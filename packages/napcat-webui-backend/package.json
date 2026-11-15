@@ -20,12 +20,10 @@
     "compressing": "^1.10.3",
     "compression": "^1.8.1",
     "express": "^5.0.0",
-    "express-rate-limit": "^7.5.0",
     "json5": "^2.2.3",
     "multer": "^2.0.1",
     "napcat-common": "workspace:*",
     "napcat-dpapi": "workspace:*",
-    "napcat-pty": "workspace:*",
     "ws": "^8.18.3"
   },
   "devDependencies": {

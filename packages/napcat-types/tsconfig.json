@@ -46,8 +46,6 @@
   },
   "include": [
     "./index.ts",
-    "../napcat-pty/node-pty.d.ts",
-    "../napcat-pty/native.d.ts",
     "../napcat-core/**/*.ts",
     "../napcat-onebot/**/*.ts",
     "../napcat-common/**/*.ts"

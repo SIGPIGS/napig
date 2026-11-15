@@ -20,10 +20,8 @@ const ConfigPage = lazy(() => import('@/pages/dashboard/config'));
 const DebugPage = lazy(() => import('@/pages/dashboard/debug'));
 const HttpDebug = lazy(() => import('@/pages/dashboard/debug/http'));
 const WSDebug = lazy(() => import('@/pages/dashboard/debug/websocket'));
-const FileManagerPage = lazy(() => import('@/pages/dashboard/file_manager'));
 const LogsPage = lazy(() => import('@/pages/dashboard/logs'));
 const NetworkPage = lazy(() => import('@/pages/dashboard/network'));
-const TerminalPage = lazy(() => import('@/pages/dashboard/terminal'));
 
 function App () {
   return (
@@ -63,8 +61,6 @@ function AppRoutes () {
           <Route path='ws' element={<WSDebug />} />
           <Route path='http' element={<HttpDebug />} />
         </Route>
-        <Route path='file_manager' element={<FileManagerPage />} />
-        <Route path='terminal' element={<TerminalPage />} />
         <Route path='about' element={<AboutPage />} />
       </Route>
       <Route path='/qq_login' element={<QQLoginPage />} />

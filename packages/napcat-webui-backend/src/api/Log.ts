@@ -1,9 +1,6 @@
 import type { RequestHandler } from 'express';
 import { sendError, sendSuccess } from '../utils/response';
-import { terminalManager } from '../terminal/terminal_manager';
 import { logSubscription, WebUiConfig } from '@/napcat-webui-backend/index';
-// 判断是否是 macos
-const isMacOS = process.platform === 'darwin';
 
 // 日志脱敏函数
 const sanitizeLog = (log: string): string => {
@@ -47,33 +44,4 @@ export const LogRealTimeHandler: RequestHandler = async (req, res) => {
   req.on('close', () => {
     logSubscription.unsubscribe(listener);
   });
-};
-
-// 终端相关处理器
-export const CreateTerminalHandler: RequestHandler = async (req, res) => {
-  if (isMacOS) {
-    return sendError(res, 'MacOS不支持终端');
-  }
-  try {
-    const { cols, rows } = req.body;
-    const { id } = terminalManager.createTerminal(cols, rows);
-    return sendSuccess(res, { id });
-  } catch (error) {
-    console.error('Failed to create terminal:', error);
-    return sendError(res, '创建终端失败');
-  }
-};
-
-export const GetTerminalListHandler: RequestHandler = (_, res) => {
-  const list = terminalManager.getTerminalList();
-  return sendSuccess(res, list);
-};
-
-export const CloseTerminalHandler: RequestHandler = (req, res) => {
-  const id = req.params['id'];
-  if (!id) {
-    return sendError(res, 'ID不能为空');
-  }
-  terminalManager.closeTerminal(id);
-  return sendSuccess(res, {});
 };

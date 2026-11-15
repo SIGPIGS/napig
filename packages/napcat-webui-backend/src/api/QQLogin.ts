@@ -136,7 +136,8 @@ export const QQSetQuickLoginHandler: RequestHandler = async (req, res) => {
   }
 
   // 获取快速登录状态
-  const { result, message } = await WebUiDataRuntime.requestQuickLogin(uin);
+  const { result, message, needPhoneConfirm } = await WebUiDataRuntime.requestQuickLogin(uin);
+  if (needPhoneConfirm) return sendSuccess(res, { needPhoneConfirm: true });
   if (!result) {
     return sendError(res, message);
   }

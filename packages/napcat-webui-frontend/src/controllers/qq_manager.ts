@@ -37,7 +37,7 @@ export default class QQManager {
         isLogin: boolean;
         isOffline?: boolean;
         loginError?: string;
-        loginPhase?: 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
+        loginPhase?: 'waiting_phone_confirm' | 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
         qrLoginAccepted?: boolean;
         coreReady?: boolean;
       }>

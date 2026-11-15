@@ -15,7 +15,6 @@ import { configureExternalAuth, externalAuthError } from './src/helper/ExternalA
 import { auth } from './src/middleware/auth';
 import { sendError } from '@/napcat-webui-backend/src/utils/response';
 import { join, dirname, resolve } from 'node:path';
-import { terminalManager } from '@/napcat-webui-backend/src/terminal/terminal_manager';
 import multer from 'multer';
 import * as net from 'node:net';
 import { WebUiDataRuntime } from './src/helper/Data';
@@ -132,7 +131,8 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
       const quickPasswordMd5 = resolveQuickPasswordMd5();
 
       try {
-        const { result, message } = await WebUiDataRuntime.requestQuickLogin(autoLoginAccount);
+        const { result, message, needPhoneConfirm } = await WebUiDataRuntime.requestQuickLogin(autoLoginAccount);
+        if (needPhoneConfirm) return;
         if (result) {
           console.log(`[NapCat] [WebUi] 自动快速登录成功: ${autoLoginAccount}`);
           return;
@@ -312,8 +312,7 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
     if (url.pathname.startsWith('/api/Debug/ws')) {
       handleDebugWebSocket(request, socket, head);
     } else {
-      // 默认为终端 WebSocket
-      terminalManager.initialize(request, socket, head, logger);
+      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
     }
   });
   // 挂载API接口

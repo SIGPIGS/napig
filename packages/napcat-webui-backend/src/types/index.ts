@@ -30,6 +30,7 @@ export enum NapCatCoreWorkingEnv {
 }
 
 export type QQLoginPhase =
+  | 'waiting_phone_confirm'
   | 'waiting_qrcode'
   | 'generating_qrcode'
   | 'qrcode_scanned'
@@ -53,7 +54,7 @@ export interface LoginRuntimeType {
   WebUiConfigQuickFunction: () => Promise<void>;
   OneBotContext: any | null; // OneBot 上下文，用于调试功能
   NapCatHelper: {
-    onQuickLoginRequested: (uin: string) => Promise<{ result: boolean; message: string; }>;
+    onQuickLoginRequested: (uin: string) => Promise<{ result: boolean; message: string; needPhoneConfirm?: boolean; }>;
     onPasswordLoginRequested: (uin: string, passwordMd5: string) => Promise<{ result: boolean; message: string; needCaptcha?: boolean; proofWaterUrl?: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;
     onCaptchaLoginRequested: (uin: string, passwordMd5: string, ticket: string, randstr: string, sid: string) => Promise<{ result: boolean; message: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;
     onNewDeviceLoginRequested: (uin: string, passwordMd5: string, newDevicePullQrCodeSig: string) => Promise<{ result: boolean; message: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;

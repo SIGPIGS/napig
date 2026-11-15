@@ -389,6 +389,22 @@ export default function QQLoginPage () {
             </CardHeader>
 
             <CardBody className='flex gap-5 p-10 pt-0'>
+              {loginPhase === 'waiting_phone_confirm' && (
+                <div role='status' className='rounded-lg bg-primary-50 px-4 py-4 text-center space-y-3'>
+                  <div className='font-medium'>请在手机 QQ 上确认登录</div>
+                  <div className='text-sm text-default-600'>
+                    可勾选“下次登录无需手机验证”。确认后将自动继续登录，最多等待 3 分钟。
+                  </div>
+                  <Button
+                    size='sm' variant='flat' isLoading={isRefreshingQRCode} onPress={() => {
+                      setActiveTab('qrcode');
+                      onRefreshQRCode();
+                    }}
+                  >
+                    改用二维码登录
+                  </Button>
+                </div>
+              )}
               <Tabs
                 fullWidth
                 classNames={{
@@ -402,7 +418,7 @@ export default function QQLoginPage () {
                 <Tab key='shortcut' title='快速登录'>
                   <QuickLogin
                     handleSelectionChange={handleSelectionChange}
-                    isLoading={isLoading}
+                    isLoading={isLoading || loginPhase === 'waiting_phone_confirm'}
                     qqList={qqList}
                     refresh={refresh}
                     selectedQQ={uinValue}
@@ -412,7 +428,7 @@ export default function QQLoginPage () {
                 </Tab>
                 <Tab key='password' title='密码登录'>
                   <PasswordLogin
-                    isLoading={isLoading}
+                    isLoading={isLoading || loginPhase === 'waiting_phone_confirm'}
                     onSubmit={onPasswordSubmit}
                     onCaptchaSubmit={onCaptchaSubmit}
                     onNewDeviceVerified={onNewDeviceVerified}

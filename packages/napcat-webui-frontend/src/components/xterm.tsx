@@ -22,17 +22,12 @@ export type XTermRef = {
   terminalRef: React.RefObject<Terminal | null>;
 };
 
-export interface XTermProps
-  extends Omit<React.HTMLAttributes<HTMLDivElement>, 'onInput' | 'onResize'> {
-  onInput?: (data: string) => void;
-  onKey?: (key: string, event: KeyboardEvent) => void;
-  onResize?: (cols: number, rows: number) => void; // 新增属性
-}
+export type XTermProps = React.HTMLAttributes<HTMLDivElement>;
 
 const XTerm = forwardRef<XTermRef, XTermProps>((props, ref) => {
   const domRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const { className, onInput, onKey, onResize, ...rest } = props;
+  const { className, ...rest } = props;
   const { theme } = useTheme();
   useEffect(() => {
     // 根据屏幕宽度决定字体大小，手机端使用更小的字体
@@ -50,6 +45,7 @@ const XTerm = forwardRef<XTermRef, XTermProps>((props, ref) => {
     } // ≥1280: 16
 
     const terminal = new Terminal({
+      disableStdin: true,
       allowTransparency: true,
       fontFamily:
         'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", "JetBrains Mono", monospace',
@@ -72,26 +68,8 @@ const XTerm = forwardRef<XTermRef, XTermProps>((props, ref) => {
 
     // 所有端都使用 Canvas 渲染器（包括手机端）
     terminal.loadAddon(new CanvasAddon());
-    terminal.onData((data) => {
-      if (onInput) {
-        onInput(data);
-      }
-    });
-
-    terminal.onKey((event) => {
-      if (onKey) {
-        onKey(event.key, event.domEvent);
-      }
-    });
-
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      // 获取当前终端尺寸
-      const cols = terminal.cols;
-      const rows = terminal.rows;
-      if (onResize) {
-        onResize(cols, rows);
-      }
     });
 
     // 字体加载完成后重新调整终端大小
