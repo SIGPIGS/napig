@@ -12,7 +12,6 @@ export const GetWebUIConfigHandler: RequestHandler = async (_, res) => {
     return sendSuccess(res, {
       host: config.host,
       port: config.port,
-      loginRate: config.loginRate,
       disableWebUI: config.disableWebUI,
       accessControlMode: config.accessControlMode || 'none',
       ipWhitelist: config.ipWhitelist || [],
@@ -93,7 +92,7 @@ export const GetClientIPHandler: RequestHandler = async (req, res) => {
 // 更新WebUI基础配置
 export const UpdateWebUIConfigHandler: RequestHandler = async (req, res) => {
   try {
-    const { host, port, loginRate, disableWebUI, accessControlMode, ipWhitelist, ipBlacklist, enableXForwardedFor } = req.body;
+    const { host, port, disableWebUI, accessControlMode, ipWhitelist, ipBlacklist, enableXForwardedFor } = req.body;
 
     const updateConfig: any = {};
 
@@ -109,13 +108,6 @@ export const UpdateWebUIConfigHandler: RequestHandler = async (req, res) => {
         return sendError(res, 'port必须是1-65535之间的整数');
       }
       updateConfig.port = port;
-    }
-
-    if (loginRate !== undefined) {
-      if (!Number.isInteger(loginRate) || loginRate < 1) {
-        return sendError(res, 'loginRate必须是大于0的整数');
-      }
-      updateConfig.loginRate = loginRate;
     }
 
     if (disableWebUI !== undefined) {

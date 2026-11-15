@@ -19,15 +19,6 @@ if [ ! -f "napcat/napcat.mjs" ] || [ ! -f "napcat/config/napcat.json" ]; then
     rm -rf ./NapCat.Shell
 fi
 
-# 配置 WebUI Token
-CONFIG_PATH=/app/napcat/config/webui.json
-
-if [ ! -f "${CONFIG_PATH}" ] && [ -n "${WEBUI_TOKEN}" ]; then
-    echo "正在配置 WebUI Token..."
-    jq -n --arg prefix "${WEBUI_PREFIX}" --arg token "${WEBUI_TOKEN}" \
-        '{host: "0.0.0.0", prefix: $prefix, port: 6099, token: $token, loginRate: 3}' > "${CONFIG_PATH}" || exit 1
-fi
-
 rm -rf "/tmp/.X1-lock"
 
 # 删除容器标识

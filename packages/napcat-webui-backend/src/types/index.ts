@@ -18,21 +18,10 @@ interface SelfInfo {
 export interface WebUiConfigType {
   host: string;
   port: number;
-  token: string;
-  loginRate: number;
   accessControlMode?: 'none' | 'whitelist' | 'blacklist';
   ipWhitelist?: string[];
   ipBlacklist?: string[];
   enableXForwardedFor?: boolean;
-}
-export interface WebUiCredentialInnerJson {
-  CreatedTime: number;
-  HashEncoded: string;
-}
-
-export interface WebUiCredentialJson {
-  Data: WebUiCredentialInnerJson;
-  Hmac: string;
 }
 export enum NapCatCoreWorkingEnv {
   Unknown = 0,
@@ -51,8 +40,6 @@ export type QQLoginPhase =
 
 export interface LoginRuntimeType {
   workingEnv: NapCatCoreWorkingEnv;
-  LoginCurrentTime: number;
-  LoginCurrentRate: number;
   QQLoginStatus: boolean;
   QQLoginPhase: QQLoginPhase;
   QQQRCodeURL: string;
@@ -62,7 +49,6 @@ export interface LoginRuntimeType {
   QQVersion: string;
   QQDataPath: string;
   onQQLoginStatusChange: (status: boolean) => Promise<void>;
-  onWebUiTokenChange: (token: string) => Promise<void>;
   onRefreshQRCode: () => Promise<void>;
   WebUiConfigQuickFunction: () => Promise<void>;
   OneBotContext: any | null; // OneBot 上下文，用于调试功能

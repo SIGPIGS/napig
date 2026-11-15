@@ -1,5 +1,6 @@
 import { NapCatPathWrapper } from 'napcat-common/src/path';
-import { InitWebUi, WebUiConfig, webUiRuntimePort } from 'napcat-webui-backend/index';
+import { configureExternalAuth } from '@/napcat-webui-backend/src/helper/ExternalAuth';
+import { InitWebUi } from 'napcat-webui-backend/index';
 import { NapCatAdapterManager } from 'napcat-adapter';
 import { NativePacketHandler } from 'napcat-core/packet/handler/client';
 import { Napi2NativeLoader } from 'napcat-core/packet/handler/napi2nativeLoader';
@@ -17,8 +18,7 @@ import { OidbSvcTrpcTcpBase, OidbSvcTrpcTcp0XCDE_2RespBody } from '@/napcat-core
 
 // Framework ES入口文件
 export async function getWebUiUrl () {
-  const WebUiConfigData = (await WebUiConfig.GetWebUIConfig());
-  return 'http://127.0.0.1:' + webUiRuntimePort + '/webui/?token=' + encodeURIComponent(WebUiConfigData.token);
+  return new URL('/webui/', configureExternalAuth()).toString();
 }
 
 export async function NCoreInitFramework (

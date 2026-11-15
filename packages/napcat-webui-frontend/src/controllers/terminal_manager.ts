@@ -1,4 +1,5 @@
 import { serverRequest } from '@/utils/request';
+import { checkSessionAfterDisconnect } from '@/utils/auth';
 
 type TerminalCallback = (data: string) => void;
 
@@ -55,12 +56,9 @@ class TerminalManager {
       const url = new URL(window.location.href);
       url.protocol = url.protocol.replace('http', 'ws');
       url.pathname = '/api/ws/terminal';
+      url.search = '';
+      url.hash = '';
       url.searchParams.set('id', id);
-      const token = JSON.parse(localStorage.getItem('token') || '');
-      if (!token) {
-        throw new Error('No token found');
-      }
-      url.searchParams.set('token', token);
       const ws = new WebSocket(url.toString());
       conn = {
         ws,
@@ -85,6 +83,7 @@ class TerminalManager {
       };
 
       ws.onclose = () => {
+        checkSessionAfterDisconnect();
         if (conn) conn.isConnected = false;
       };
 

@@ -30,7 +30,6 @@ const ServerConfigCard = () => {
   } = useForm<{
     host: string;
     port: number;
-    loginRate: number;
     disableWebUI: boolean;
     accessControlMode: 'none' | 'whitelist' | 'blacklist';
     ipWhitelist: string[];
@@ -40,7 +39,6 @@ const ServerConfigCard = () => {
     defaultValues: {
       host: '0.0.0.0',
       port: 6099,
-      loginRate: 10,
       disableWebUI: false,
       accessControlMode: 'none',
       ipWhitelist: [],
@@ -55,7 +53,6 @@ const ServerConfigCard = () => {
     if (configData) {
       setConfigValue('host', configData.host);
       setConfigValue('port', configData.port);
-      setConfigValue('loginRate', configData.loginRate);
       setConfigValue('disableWebUI', configData.disableWebUI);
       setConfigValue('accessControlMode', configData.accessControlMode || 'none');
       setConfigValue('ipWhitelist', configData.ipWhitelist || []);
@@ -178,28 +175,6 @@ const ServerConfigCard = () => {
                 label='监听端口'
                 placeholder='请输入监听端口'
                 description='服务器监听的端口号，范围1-65535'
-                isDisabled={!!configError}
-                errorMessage={configError ? '获取配置失败' : undefined}
-                onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
-                classNames={{
-                  inputWrapper:
-                    'bg-default-100/50 dark:bg-white/5 backdrop-blur-md border border-transparent hover:bg-default-200/50 dark:hover:bg-white/10 transition-all shadow-sm data-[hover=true]:border-default-300',
-                  input: 'bg-transparent text-gray-800 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500',
-                }}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name='loginRate'
-            render={({ field }) => (
-              <Input
-                {...field}
-                type='number'
-                value={field.value?.toString() || ''}
-                label='登录速率限制'
-                placeholder='请输入登录速率限制'
-                description='每小时允许的登录尝试次数'
                 isDisabled={!!configError}
                 errorMessage={configError ? '获取配置失败' : undefined}
                 onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}

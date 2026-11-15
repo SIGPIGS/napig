@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import CryptoJS from 'crypto-js';
+import { signOut } from '@/utils/auth';
 import { MdSettings } from 'react-icons/md';
 
 import logo from '@/assets/images/logo.png';
@@ -438,13 +439,9 @@ export default function QQLoginPage () {
                 className='w-fit mx-auto'
                 variant='light'
                 color='primary'
-                onPress={() => {
-                  navigate('/web_login', {
-                    replace: true,
-                  });
-                }}
+                onPress={signOut}
               >
-                返回 Web Login
+                退出 WebUI
               </Button>
             </CardBody>
           </HoverEffectCard>

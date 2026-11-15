@@ -81,3 +81,18 @@ _Modern protocol-side framework implemented based on NTQQ._
 2. 项目其余逻辑代码采用[本仓库开源许可](./LICENSE).
 
 **本仓库仅用于提高易用性，实现消息推送类功能，此外，禁止任何项目未经仓库主作者授权基于 NapCat 代码开发。使用请遵守当地法律法规，由此造成的问题由使用者和提供违规使用教程者负责。**
+
+## WebUI 外部认证
+
+Napig WebUI 由反向代理统一认证，不再提供共享 token、Passkey 或双因素登录。启用 WebUI 时必须设置
+`NAPCAT_WEBUI_PUBLIC_URL` 为公开访问 origin，例如 `https://napcat.example.com`，不包含路径。
+缺少该配置时 WebUI 不启动；QQ 登录和 OneBot 服务不依赖 WebUI 认证。
+
+代理必须先验证用户，再覆盖 `X-Auth-Request-User` 请求头。所有 WebUI 页面、API、日志流和 WebSocket
+均要求该身份头；写请求和 WebSocket 握手的 `Origin` 必须与公开 origin 一致。认证头本身不是签名凭证，
+部署必须使用网络隔离或仅限本机的监听地址，确保客户端不能绕过代理直连后端，也不能自行伪造身份头。
+
+代理还需提供 `/oauth2/*` 登录与退出入口：浏览器会话过期后跳转 `/oauth2/start?rd=...`；
+退出使用 `/oauth2/sign_out` 并返回 `/oauth2/sign_in`，等待用户主动再次登录。API 请求未认证时应返回
+HTTP 401，不应重定向 API、SSE 或 WebSocket 请求到身份提供方。QQ 扫码、快速和密码登录，以及
+OneBot HTTP/WebSocket 客户端使用的 token 保持独立。

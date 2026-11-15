@@ -1,4 +1,5 @@
 import { TSchema } from '@sinclair/typebox';
+import { requestServerWithFetch } from '@/utils/request';
 
 export interface OneBotHttpApiContent {
   description?: string;
@@ -14,11 +15,7 @@ let oneBotHttpApi: OneBotHttpApi = {};
 
 export async function fetchOneBotHttpApi (): Promise<OneBotHttpApi> {
   try {
-    const response = await fetch('/api/Debug/schemas', {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('token')}`,
-      },
-    });
+    const response = await requestServerWithFetch('/Debug/schemas', {});
     const data = await response.json();
     if (data.code === 0) {
       oneBotHttpApi = data.data;

@@ -3,7 +3,6 @@ import { ChatType, NTMsgType, type RawMessage } from 'napcat-core';
 import { NapCatOneBot11Adapter } from '@/napcat-onebot/index';
 
 vi.mock('../napcat-webui-backend/index', () => ({
-  pendingTokenToSend: undefined,
 }));
 
 vi.mock('../napcat-webui-backend/src/helper/Data', () => ({

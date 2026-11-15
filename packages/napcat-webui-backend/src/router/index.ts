@@ -5,7 +5,6 @@
 import { Router } from 'express';
 
 import { OB11ConfigRouter } from '@/napcat-webui-backend/src/router/OB11Config';
-import { auth } from '@/napcat-webui-backend/src/middleware/auth';
 import { sendSuccess } from '@/napcat-webui-backend/src/utils/response';
 
 import { QQLoginRouter } from '@/napcat-webui-backend/src/router/QQLogin';
@@ -20,9 +19,6 @@ import { MirrorRouter } from './Mirror';
 import { NapCatConfigRouter } from './NapCatConfig';
 
 const router: Router = Router();
-
-// 鉴权中间件
-router.use(auth);
 
 // router:测试用
 router.all('/test', (_, res) => {

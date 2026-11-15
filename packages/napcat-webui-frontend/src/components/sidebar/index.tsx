@@ -7,7 +7,7 @@ import { IoMdLogOut } from 'react-icons/io';
 import { MdDarkMode, MdLightMode } from 'react-icons/md';
 
 import key from '@/const/key';
-import useAuth from '@/hooks/auth';
+import { signOut } from '@/utils/auth';
 import useDialog from '@/hooks/use-dialog';
 import { useTheme } from '@/hooks/use-theme';
 import type { MenuItem } from '@/config/site';
@@ -23,7 +23,6 @@ interface SideBarProps {
 const SideBar: React.FC<SideBarProps> = (props) => {
   const { open, items, onClose } = props;
   const { toggleTheme, isDark } = useTheme();
-  const { revokeAuth } = useAuth();
   const dialog = useDialog();
   const [backgroundImage] = useLocalStorage<string>(key.backgroundImage, '');
   const hasBackground = !!backgroundImage;
@@ -32,7 +31,7 @@ const SideBar: React.FC<SideBarProps> = (props) => {
     dialog.confirm({
       title: '退出登录',
       content: '确定要退出登录吗？',
-      onConfirm: revokeAuth,
+      onConfirm: signOut,
     });
   };
   return (

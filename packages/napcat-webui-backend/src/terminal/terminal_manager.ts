@@ -1,7 +1,5 @@
 // import './init-dynamic-dirname';
-import { WebUiConfig } from '../../index';
-import { AuthHelper } from '../helper/SignToken';
-import type { WebUiCredentialJson } from '@/napcat-webui-backend/src/types';
+import { externalAuthError } from '../helper/ExternalAuth';
 import { WebSocket, WebSocketServer } from 'ws';
 import os from 'os';
 import { IPty, spawn as ptySpawn } from 'napcat-pty';
@@ -26,40 +24,17 @@ class TerminalManager {
     logger?.log('[NapCat] [WebUi] terminal websocket initialized');
     this.wss = new WebSocketServer({
       noServer: true,
-      verifyClient: async (info, cb) => {
-        // 验证 token
+      verifyClient: (info, cb) => {
         const url = new URL(info.req.url || '', 'ws://localhost');
-        const token = url.searchParams.get('token');
-        const terminalId = url.searchParams.get('id');
-
-        if (!token || !terminalId) {
+        const error = externalAuthError(info.req, true);
+        if (error || !url.searchParams.get('id')) {
           // eslint-disable-next-line n/no-callback-literal
-          cb(false, 401, 'Unauthorized');
-          return;
-        }
-
-        // 解析token
-        let Credential: WebUiCredentialJson;
-        try {
-          Credential = JSON.parse(Buffer.from(token, 'base64').toString('utf-8'));
-        } catch (_e) {
-          // eslint-disable-next-line n/no-callback-literal
-          cb(false, 401, 'Unauthorized');
-          return;
-        }
-        const config = await WebUiConfig.GetWebUIConfig();
-        const validate = AuthHelper.validateCredentialWithinOneHour(config.token, Credential);
-        if (!validate) {
-          // eslint-disable-next-line n/no-callback-literal
-          cb(false, 401, 'Unauthorized');
+          cb(false, error?.status || 400, error?.message || 'Missing terminal ID');
           return;
         }
         // eslint-disable-next-line n/no-callback-literal
         cb(true);
       },
-    });
-    this.wss.handleUpgrade(req, socket, head, (ws) => {
-      this.wss?.emit('connection', ws, req);
     });
     this.wss.on('connection', async (ws, req) => {
       logger?.log('建立终端连接');
@@ -116,6 +91,9 @@ class TerminalManager {
         console.error('WebSocket authentication failed:', err);
         ws.close();
       }
+    });
+    this.wss.handleUpgrade(req, socket, head, (ws) => {
+      this.wss?.emit('connection', ws, req);
     });
   }
 

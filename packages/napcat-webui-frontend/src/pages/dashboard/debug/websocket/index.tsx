@@ -1,3 +1,4 @@
+import { requestServerWithFetch } from '@/utils/request';
 import { Button } from '@heroui/button';
 import { Card, CardBody } from '@heroui/card';
 import { Input } from '@heroui/input';
@@ -47,11 +48,10 @@ export default function WSDebug () {
 
     const initAdapter = async () => {
       try {
-        const response = await fetch('/api/Debug/create', {
+        const response = await requestServerWithFetch('/Debug/create', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
           },
         });
         const data = await response.json();

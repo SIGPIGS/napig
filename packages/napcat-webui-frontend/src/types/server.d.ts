@@ -4,12 +4,6 @@ interface ServerResponse<T> {
   message: string;
 }
 
-interface AuthResponse {
-  Credential?: string;
-  require2FA?: boolean;
-  message?: string;
-}
-
 interface LoginListItem {
   uin: string;
   uid: string;
@@ -188,7 +182,6 @@ interface ThemeConfig {
 interface WebUIConfig {
   host: string;
   port: number;
-  loginRate: number;
   disableWebUI: boolean;
   accessControlMode: 'none' | 'whitelist' | 'blacklist';
   ipWhitelist: string[];

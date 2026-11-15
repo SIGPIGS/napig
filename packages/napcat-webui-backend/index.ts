@@ -4,14 +4,15 @@
 
 import express from 'express';
 import type { WebUiConfigType } from './src/types';
-import { createServer } from 'http';
-import { createHash, randomUUID } from 'node:crypto';
+import { createServer, STATUS_CODES } from 'http';
+import { createHash } from 'node:crypto';
 import { createServer as createHttpsServer } from 'https';
 import { NapCatPathWrapper } from 'napcat-common/src/path';
 import { WebUiConfigWrapper } from '@/napcat-webui-backend/src/helper/config';
 import { ALLRouter } from '@/napcat-webui-backend/src/router';
 import { cors } from '@/napcat-webui-backend/src/middleware/cors';
-import { createUrl, getRandomToken } from '@/napcat-webui-backend/src/utils/url';
+import { configureExternalAuth, externalAuthError } from './src/helper/ExternalAuth';
+import { auth } from './src/middleware/auth';
 import { sendError } from '@/napcat-webui-backend/src/utils/response';
 import { join, dirname, resolve } from 'node:path';
 import { terminalManager } from '@/napcat-webui-backend/src/terminal/terminal_manager';
@@ -45,30 +46,7 @@ export let webUiLogger: ILogWrapper | null = null;
 const MAX_PORT_TRY = 100;
 
 export let webUiRuntimePort = 6099;
-// 全局变量：存储需要在QQ登录成功后发送的新token
-export let pendingTokenToSend: string | null = null;
-
-/**
- * 存储WebUI启动时的初始token，用于鉴权
- * - 无论是否在运行时修改密码，都应该使用此token进行鉴权
- * - 运行时手动修改的密码将会在下次napcat重启后生效
- * - 如果需要在运行时修改密码并立即生效，则需要在前端调用路由进行修改
- */
-let initialWebUiToken: string = '';
-
-export function setInitialWebUiToken (token: string) {
-  initialWebUiToken = token;
-}
-
-export function getInitialWebUiToken (): string {
-  return initialWebUiToken;
-}
-
-export function setPendingTokenToSend (token: string | null) {
-  pendingTokenToSend = token;
-}
-
-export async function InitPort (parsedConfig: WebUiConfigType): Promise<[string, number, string]> {
+export async function InitPort (parsedConfig: WebUiConfigType): Promise<[string, number]> {
   try {
     await tryUseHost(parsedConfig.host);
     const preferredPort = parseInt(process.env['NAPCAT_WEBUI_PREFERRED_PORT'] || '', 10);
@@ -84,10 +62,10 @@ export async function InitPort (parsedConfig: WebUiConfigType): Promise<[string,
       port = await tryUsePort(parsedConfig.port, parsedConfig.host);
     }
 
-    return [parsedConfig.host, port, parsedConfig.token];
+    return [parsedConfig.host, port];
   } catch (error) {
     console.log('host或port不可用', error);
-    return ['', 0, randomUUID()];
+    return ['', 0];
   }
 }
 
@@ -114,37 +92,16 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
   statusHelperSubscription = statusSubscription;
   webUiLogger = logger;
   WebUiConfig = new WebUiConfigWrapper();
-  let config = await WebUiConfig.GetWebUIConfig();
+  const config = await WebUiConfig.GetWebUIConfig();
 
-  // 检查是否禁用WebUI（若禁用则不进行密码检测）
+  // 检查是否禁用 WebUI
   if (config.disableWebUI) {
     logger.log('[NapCat] [WebUi] WebUI is disabled by configuration.');
     return;
   }
 
-  // 优先使用环境变量覆盖 Token
-  if (process.env['NAPCAT_WEBUI_SECRET_KEY'] && config.token !== process.env['NAPCAT_WEBUI_SECRET_KEY']) {
-    await WebUiConfig.UpdateWebUIConfig({ token: process.env['NAPCAT_WEBUI_SECRET_KEY'] });
-    logger.log(`[NapCat] [WebUi] 检测到环境变量配置，已更新 WebUI Token 为 ${process.env['NAPCAT_WEBUI_SECRET_KEY']}`);
-    config = await WebUiConfig.GetWebUIConfig();
-  } else if (config.token === 'napcat' || !config.token) {
-    // 只有没设置环境变量，且是默认密码时，才生成随机密码
-    const randomToken = getRandomToken(8);
-    await WebUiConfig.UpdateWebUIConfig({ token: randomToken });
-    logger.log('[NapCat] [WebUi] 检测到默认密码，已自动更新为安全密码');
-
-    // 存储token到全局变量，等待QQ登录成功后发送
-    setPendingTokenToSend(randomToken);
-    logger.log('[NapCat] [WebUi] 新密码将在QQ登录成功后发送给用户');
-
-    // 重新获取更新后的配置
-    config = await WebUiConfig.GetWebUIConfig();
-  }
-
-  // 存储启动时的初始token用于鉴权
-  setInitialWebUiToken(config.token);
-
-  const [host, port, token] = await InitPort(config);
+  const publicOrigin = configureExternalAuth();
+  const [host, port] = await InitPort(config);
   webUiRuntimePort = port;
   if (port === 0) {
     logger.log('[NapCat] [WebUi] Current WebUi is not run.');
@@ -211,6 +168,7 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
     });
   // ------------注册中间件------------
   // 使用express的json中间件
+  app.use(auth);
   app.use(express.json());
   // 启用gzip压缩（对所有响应启用，阈值1KB）
   app.use(compression({
@@ -218,7 +176,7 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
     threshold: 1024, // 只压缩大于 1KB 的响应
     filter: (req, res) => {
       // 不压缩 SSE 和 WebSocket 升级请求
-      if (req.headers['accept'] === 'text/event-stream') {
+      if (req.headers['accept']?.includes('text/event-stream')) {
         return false;
       }
       // 使用默认过滤器
@@ -343,6 +301,11 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
   const isHttps = !!sslCerts;
   const server = isHttps && sslCerts ? createHttpsServer(sslCerts, app) : createServer(app);
   server.on('upgrade', (request, socket, head) => {
+    const error = externalAuthError(request, true);
+    if (error) {
+      socket.end(`HTTP/1.1 ${error.status} ${STATUS_CODES[error.status]}\r\nConnection: close\r\n\r\n`);
+      return;
+    }
     const url = new URL(request.url || '', `http://${request.headers.host}`);
 
     // 检查是否是调试 WebSocket 连接
@@ -364,7 +327,7 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
 
   // 初始服务（先放个首页）
   app.all('/', (_req, res) => {
-    res.status(301).header('Location', '/webui').send();
+    res.status(301).header('Location', '/webui/').send();
   });
 
   // 错误处理中间件，捕获multer的错误
@@ -381,17 +344,8 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
   });
 
   // ------------启动服务------------
-  server.listen(port, host, async () => {
-    const searchParams = { token };
-    logger.log(`[NapCat] [WebUi] WebUi Token: ${token}`);
-    logger.log(
-      `[NapCat] [WebUi] WebUi User Panel Url: ${createUrl('127.0.0.1', port.toString(), '/webui', searchParams)}`
-    );
-    if (host !== '') {
-      logger.log(
-        `[NapCat] [WebUi] WebUi User Panel Url: ${createUrl(host, port.toString(), '/webui', searchParams)}`
-      );
-    }
+  server.listen(port, host, () => {
+    logger.log(`[NapCat] [WebUi] External authentication enabled: ${publicOrigin}/webui/`);
   });
 
   // ------------Over！------------

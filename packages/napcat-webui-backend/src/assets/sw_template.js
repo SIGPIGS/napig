@@ -49,7 +49,7 @@ function isNeverCache (url, request) {
   if (request.headers.get('Upgrade') === 'websocket') return true;
 
   // SSE 请求
-  if (request.headers.get('Accept') === 'text/event-stream') return true;
+  if (request.headers.get('Accept')?.includes('text/event-stream')) return true;
 
   // Socket 相关
   if (url.pathname.includes('/socket')) return true;

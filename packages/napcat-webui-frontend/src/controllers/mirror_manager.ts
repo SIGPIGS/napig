@@ -1,6 +1,6 @@
 import { EventSourcePolyfill } from 'event-source-polyfill';
 import { serverRequest } from '@/utils/request';
-import key from '@/const/key';
+import { checkSessionAfterDisconnect } from '@/utils/auth';
 
 export interface MirrorTestResult {
   mirror: string;
@@ -53,18 +53,11 @@ export default class MirrorManager {
       onError?: (error: string) => void;
     }
   ): EventSourcePolyfill {
-    const token = localStorage.getItem(key.token);
-    if (!token) {
-      throw new Error('未登录');
-    }
-    const _token = JSON.parse(token);
-
     const eventSource = new EventSourcePolyfill(
       `/api/Mirror/Test/SSE?type=${type}`,
       {
         headers: {
-          Authorization: `Bearer ${_token}`,
-          Accept: 'text/event-stream',
+          Accept: 'text/event-stream, application/json',
         },
         withCredentials: true,
       }
@@ -99,6 +92,7 @@ export default class MirrorManager {
     };
 
     eventSource.onerror = (error) => {
+      checkSessionAfterDisconnect();
       console.error('SSE连接出错:', error);
       callbacks.onError?.('连接中断');
       eventSource.close();

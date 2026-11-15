@@ -1,4 +1,4 @@
-import { webUiPathWrapper, getInitialWebUiToken } from '@/napcat-webui-backend/index';
+import { webUiPathWrapper } from '@/napcat-webui-backend/index';
 import { Type, Static } from '@sinclair/typebox';
 import { TypeCompiler } from '@sinclair/typebox/compiler';
 import { Value } from '@sinclair/typebox/value';
@@ -8,15 +8,12 @@ import { resolve } from 'node:path';
 
 import { deepMerge } from '../utils/object';
 import { themeType } from '../types/theme';
-import { getRandomToken } from '../utils/url';
 
 // 限制尝试端口的次数，避免死循环
 // 定义配置的类型
 const WebUiConfigSchema = Type.Object({
   host: Type.String({ default: '::' }),
   port: Type.Number({ default: 6099 }),
-  token: Type.String({ default: getRandomToken(12) }),
-  loginRate: Type.Number({ default: 10 }),
   autoLoginAccount: Type.String({ default: '' }),
   theme: themeType,
   // 是否关闭WebUI
@@ -33,10 +30,6 @@ const WebUiConfigSchema = Type.Object({
   ipBlacklist: Type.Array(Type.String(), { default: [] }),
   // 是否启用 X-Forwarded-For 获取真实IP
   enableXForwardedFor: Type.Boolean({ default: false }),
-  // 是否启用双因素认证（2FA）
-  enable2FA: Type.Boolean({ default: false }),
-  // TOTP 密钥
-  totpSecret: Type.String({ default: '' }),
 });
 
 export type WebUiConfigType = Static<typeof WebUiConfigSchema>;
@@ -91,63 +84,23 @@ export class WebUiConfigWrapper {
       const configPath = resolve(webUiPathWrapper.configPath, './webui.json');
       await this.ensureConfigFileExists(configPath);
       const parsedConfig = await this.readAndValidateConfig(configPath);
-      // 使用内存中缓存的token进行覆盖，确保强兼容性
-      this.WebUiConfigData = {
-        ...parsedConfig,
-        // 首次读取内存中是没有token的，需要进行一层兜底
-        token: getInitialWebUiToken() || parsedConfig.token,
-      };
+      this.WebUiConfigData = parsedConfig;
       return this.WebUiConfigData;
     } catch (e) {
       console.log('读取配置文件失败', e);
-      const defaultConfig = this.validateAndApplyDefaults({});
-      this.WebUiConfigData = {
-        ...defaultConfig,
-        token: getInitialWebUiToken() || defaultConfig.token,
-      };
+      this.WebUiConfigData = this.validateAndApplyDefaults({});
       return this.WebUiConfigData;
     }
   }
 
   async UpdateWebUIConfig (newConfig: Partial<WebUiConfigType>): Promise<void> {
     const configPath = resolve(webUiPathWrapper.configPath, './webui.json');
-    // 使用原始配置进行合并，避免内存token覆盖影响配置更新
-    const currentConfig = await this.GetRawWebUIConfig();
+    // 合并现有配置
+    const currentConfig = await this.GetWebUIConfig();
     const mergedConfig = deepMerge({ ...currentConfig }, newConfig);
     const updatedConfig = this.validateAndApplyDefaults(mergedConfig);
     await this.writeConfig(configPath, updatedConfig);
     this.WebUiConfigData = updatedConfig;
-  }
-
-  /**
-     * 获取配置文件中实际存储的配置（不被内存token覆盖）
-     * 主要用于配置更新和特殊场景
-     */
-  async GetRawWebUIConfig (): Promise<WebUiConfigType> {
-    if (this.WebUiConfigData) {
-      return this.WebUiConfigData;
-    }
-    try {
-      const configPath = resolve(webUiPathWrapper.configPath, './webui.json');
-      await this.ensureConfigFileExists(configPath);
-      const parsedConfig = await this.readAndValidateConfig(configPath);
-      this.WebUiConfigData = parsedConfig;
-      return this.WebUiConfigData;
-    } catch (e) {
-      console.log('读取配置文件失败', e);
-      return this.validateAndApplyDefaults({});
-    }
-  }
-
-  async UpdateToken (oldToken: string, newToken: string): Promise<void> {
-    // 使用内存中缓存的token进行验证，确保强兼容性
-    const cachedToken = getInitialWebUiToken();
-    const tokenToCheck = cachedToken || (await this.GetWebUIConfig()).token;
-
-    if (tokenToCheck !== oldToken) {
-      throw new Error('旧 token 不匹配');
-    }
-    await this.UpdateWebUIConfig({ token: newToken });
   }
 
   // 获取日志文件夹路径

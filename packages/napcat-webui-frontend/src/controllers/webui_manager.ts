@@ -1,9 +1,9 @@
-import CryptoJS from 'crypto-js';
 import { EventSourcePolyfill } from 'event-source-polyfill';
 
 import { LogLevel } from '@/const/enum';
 
 import { serverRequest } from '@/utils/request';
+import { checkSessionAfterDisconnect } from '@/utils/auth';
 
 export interface Log {
   level: LogLevel;
@@ -11,59 +11,6 @@ export interface Log {
 }
 
 export default class WebUIManager {
-  public static async checkWebUiLogined () {
-    const { data } =
-      await serverRequest.post<ServerResponse<boolean>>('/auth/check');
-    return data.data;
-  }
-
-  public static async loginWithToken (token: string, totpCode?: string) {
-    const sha256 = CryptoJS.SHA256(token + '.napcat').toString();
-    const { data } = await serverRequest.post<ServerResponse<AuthResponse>>(
-      '/auth/login',
-      { hash: sha256, totpCode }
-    );
-    return data.data;
-  }
-
-  public static async get2FAStatus () {
-    const { data } = await serverRequest.get<ServerResponse<{ enable2FA: boolean; hasSecret: boolean; }>>(
-      '/auth/2fa/status'
-    );
-    return data.data;
-  }
-
-  public static async generate2FASecret () {
-    const { data } = await serverRequest.post<ServerResponse<{ secret: string; qrCodeUrl: string; }>>(
-      '/auth/2fa/generate-secret'
-    );
-    return data.data;
-  }
-
-  public static async enable2FA (secret: string, totpCode: string) {
-    const { data } = await serverRequest.post<ServerResponse<{ message: string; }>>(
-      '/auth/2fa/enable',
-      { secret, totpCode }
-    );
-    return data.data;
-  }
-
-  public static async disable2FA (totpCode: string) {
-    const { data } = await serverRequest.post<ServerResponse<{ message: string; }>>(
-      '/auth/2fa/disable',
-      { totpCode }
-    );
-    return data.data;
-  }
-
-  public static async changePassword (oldToken: string, newToken: string) {
-    const { data } = await serverRequest.post<ServerResponse<boolean>>(
-      '/auth/update_token',
-      { oldToken, newToken }
-    );
-    return data.data;
-  }
-
   public static async proxy<T> (url = '') {
     const data = await serverRequest.get<ServerResponse<string>>(
       '/base/proxy?url=' + encodeURIComponent(url)
@@ -117,15 +64,9 @@ export default class WebUIManager {
   }
 
   public static getRealTimeLogs (writer: (data: Log[]) => void) {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      throw new Error('未登录');
-    }
-    const _token = JSON.parse(token);
     const eventSource = new EventSourcePolyfill('/api/Log/GetLogRealTime', {
       headers: {
-        Authorization: `Bearer ${_token}`,
-        Accept: 'text/event-stream',
+        Accept: 'text/event-stream, application/json',
       },
       withCredentials: true,
     });
@@ -141,6 +82,7 @@ export default class WebUIManager {
     };
 
     eventSource.onerror = (error) => {
+      checkSessionAfterDisconnect();
       console.error('SSE连接出错:', error);
       eventSource.close();
     };
@@ -149,17 +91,11 @@ export default class WebUIManager {
   }
 
   public static getSystemStatus (writer: (data: SystemStatus) => void) {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      throw new Error('未登录');
-    }
-    const _token = JSON.parse(token);
     const eventSource = new EventSourcePolyfill(
       '/api/base/GetSysStatusRealTime',
       {
         headers: {
-          Authorization: `Bearer ${_token}`,
-          Accept: 'text/event-stream',
+          Accept: 'text/event-stream, application/json',
         },
         withCredentials: true,
       }
@@ -175,6 +111,7 @@ export default class WebUIManager {
     };
 
     eventSource.onerror = (error) => {
+      checkSessionAfterDisconnect();
       console.error('SSE连接出错:', error);
       eventSource.close();
     };
@@ -249,37 +186,6 @@ export default class WebUIManager {
   public static async deleteSSLCert () {
     const { data } = await serverRequest.post<ServerResponse<{ message: string; }>>(
       '/WebUIConfig/DeleteSSLCert'
-    );
-    return data.data;
-  }
-
-  // Passkey相关方法
-  public static async generatePasskeyRegistrationOptions () {
-    const { data } = await serverRequest.post<ServerResponse<any>>(
-      '/auth/passkey/generate-registration-options'
-    );
-    return data.data;
-  }
-
-  public static async verifyPasskeyRegistration (response: any) {
-    const { data } = await serverRequest.post<ServerResponse<any>>(
-      '/auth/passkey/verify-registration',
-      { response }
-    );
-    return data.data;
-  }
-
-  public static async generatePasskeyAuthenticationOptions () {
-    const { data } = await serverRequest.post<ServerResponse<any>>(
-      '/auth/passkey/generate-authentication-options'
-    );
-    return data.data;
-  }
-
-  public static async verifyPasskeyAuthentication (response: any) {
-    const { data } = await serverRequest.post<ServerResponse<any>>(
-      '/auth/passkey/verify-authentication',
-      { response }
     );
     return data.data;
   }

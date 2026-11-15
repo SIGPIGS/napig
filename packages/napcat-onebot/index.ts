@@ -13,11 +13,8 @@ import {
   SendStatusType,
   NTMsgType,
   MessageElement,
-  ElementType,
-  NTMsgAtType,
 } from 'napcat-core';
 import { OB11ConfigLoader } from '@/napcat-onebot/config';
-import { pendingTokenToSend } from 'napcat-webui-backend/index';
 import {
   OB11HttpClientAdapter,
   OB11WebSocketClientAdapter,
@@ -120,38 +117,9 @@ export class NapCatOneBot11Adapter {
     const selfInfo = this.core.selfInfo;
     const ob11Config = this.configLoader.configData;
     this.core.apis.UserApi.getUserDetailInfo(selfInfo.uid, false)
-      .then(async (user) => {
+      .then((user) => {
         selfInfo.nick = user.nick;
         this.context.logger.setLogSelfInfo(selfInfo);
-
-        // 检查是否有待发送的token
-        if (pendingTokenToSend) {
-          this.context.logger.log('[NapCat] [OneBot] 🔐 检测到待发送的WebUI Token，开始发送');
-          try {
-            await this.core.apis.MsgApi.sendMsg(
-              { chatType: ChatType.KCHATTYPEC2C, peerUid: selfInfo.uid, guildId: '' },
-              [{
-                elementType: ElementType.TEXT,
-                elementId: '',
-                textElement: {
-                  content:
-                    '[NapCat] 温馨提示:\n' +
-                    'WebUI密码为默认密码，已进行强制修改\n' +
-                    '新密码: ' + pendingTokenToSend,
-                  atType: NTMsgAtType.ATTYPEUNKNOWN,
-                  atUid: '',
-                  atTinyId: '',
-                  atNtUid: '',
-                },
-              }],
-              5000
-            );
-            this.context.logger.log('[NapCat] [OneBot] ✅ WebUI Token 消息发送成功');
-          } catch (error) {
-            this.context.logger.logError('[NapCat] [OneBot] ❌ WebUI Token 消息发送失败:', error);
-          }
-        }
-
         WebUiDataRuntime.getQQLoginCallback()(true);
       })
       .catch(e => this.context.logger.logError(e));

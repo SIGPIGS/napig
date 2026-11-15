@@ -1,5 +1,4 @@
 enum key {
-  token = 'token',
   theme = 'theme',
   backgroundImage = 'background-image',
   musicID = 'music-id',

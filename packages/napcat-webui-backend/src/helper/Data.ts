@@ -1,11 +1,8 @@
-import store from 'napcat-common/src/store';
 import { napCatVersion } from 'napcat-common/src/version';
 import { NapCatCoreWorkingEnv, type LoginRuntimeType, type QQLoginPhase } from '../types';
 
 const LoginRuntime: LoginRuntimeType = {
   workingEnv: NapCatCoreWorkingEnv.Unknown,
-  LoginCurrentTime: Date.now(),
-  LoginCurrentRate: 0,
   QQLoginStatus: false, // 已实现 但太傻了 得去那边注册个回调刷新
   QQLoginPhase: 'waiting_qrcode',
   QQQRCodeURL: '',
@@ -21,9 +18,6 @@ const LoginRuntime: LoginRuntimeType = {
   OneBotContext: null,
   onQQLoginStatusChange: async (status: boolean) => {
     LoginRuntime.QQLoginStatus = status;
-  },
-  onWebUiTokenChange: async (_token: string) => {
-
   },
   onRefreshQRCode: async () => {
     throw new Error('QQ 登录服务尚未初始化，请稍后重试');
@@ -62,30 +56,6 @@ export const WebUiDataRuntime = {
   getWorkingEnv (): NapCatCoreWorkingEnv {
     return LoginRuntime.workingEnv;
   },
-  setWebUiTokenChangeCallback (func: (token: string) => Promise<void>): void {
-    LoginRuntime.onWebUiTokenChange = func;
-  },
-  getWebUiTokenChangeCallback (): (token: string) => Promise<void> {
-    return LoginRuntime.onWebUiTokenChange;
-  },
-  checkLoginRate (ip: string, RateLimit: number): boolean {
-    const key = `login_rate:${ip}`;
-    const count = store.get<number>(key) || 0;
-
-    if (count === 0) {
-      // 第一次访问，设置计数器为1，并设置60秒过期
-      store.set(key, 1, 60);
-      return true;
-    }
-
-    if (count >= RateLimit) {
-      return false;
-    }
-
-    store.set(key, count + 1);
-    return true;
-  },
-
   getQQLoginStatus (): LoginRuntimeType['QQLoginStatus'] {
     return LoginRuntime.QQLoginStatus;
   },

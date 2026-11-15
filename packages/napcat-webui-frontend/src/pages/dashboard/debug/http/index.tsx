@@ -1,3 +1,4 @@
+import { requestServerWithFetch } from '@/utils/request';
 import { Button } from '@heroui/button';
 import { useLocalStorage } from '@uidotdev/usehooks';
 import clsx from 'clsx';
@@ -49,11 +50,10 @@ export default function HttpDebug () {
       try {
         const [apiData] = await Promise.all([
           fetchOneBotHttpApi(),
-          fetch('/api/Debug/create', {
+          requestServerWithFetch('/Debug/create', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${localStorage.getItem('token')}`,
             },
           }).then(res => res.json()).then(data => {
             if (data.code === 0) {

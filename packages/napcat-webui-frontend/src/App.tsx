@@ -1,6 +1,6 @@
-import { Suspense, lazy, useEffect } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Provider } from 'react-redux';
-import { Route, Routes, useNavigate } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 
 import PageBackground from '@/components/page_background';
 import PageLoading from '@/components/page_loading';
@@ -8,11 +8,10 @@ import Toaster from '@/components/toaster';
 
 import DialogProvider from '@/contexts/dialog';
 
-import useAuth from '@/hooks/auth';
+import { serverRequest } from '@/utils/request';
 
 import store from '@/store';
 
-const WebLoginPage = lazy(() => import('@/pages/web_login'));
 const IndexPage = lazy(() => import('@/pages/index'));
 const QQLoginPage = lazy(() => import('@/pages/qq_login'));
 const DashboardIndexPage = lazy(() => import('@/pages/dashboard'));
@@ -43,23 +42,13 @@ function App () {
 }
 
 function AuthChecker ({ children }: { children: React.ReactNode; }) {
-  const { isAuth } = useAuth();
-  const navigate = useNavigate();
-
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState(false);
   useEffect(() => {
-    if (!isAuth) {
-      const search = new URLSearchParams(window.location.search);
-      const token = search.get('token');
-      let url = '/web_login';
-
-      if (token) {
-        url += `?token=${token}`;
-      }
-      navigate(url, { replace: true });
-    }
-  }, [isAuth, navigate]);
-
-  return <>{children}</>;
+    serverRequest.get('/auth/session').then(() => setReady(true)).catch(() => setError(true));
+  }, []);
+  if (error) return <div className='p-8'>无法确认登录状态，请刷新页面重试。</div>;
+  return ready ? <>{children}</> : <PageLoading />;
 }
 
 function AppRoutes () {
@@ -79,7 +68,6 @@ function AppRoutes () {
         <Route path='about' element={<AboutPage />} />
       </Route>
       <Route path='/qq_login' element={<QQLoginPage />} />
-      <Route path='/web_login' element={<WebLoginPage />} />
     </Routes>
   );
 }

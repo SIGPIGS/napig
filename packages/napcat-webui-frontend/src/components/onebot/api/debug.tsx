@@ -19,7 +19,7 @@ import ChatInputModal from '@/components/chat_input/modal';
 import CodeEditor from '@/components/code_editor';
 import PageLoading from '@/components/page_loading';
 
-import { request } from '@/utils/request';
+import { request, serverRequest } from '@/utils/request';
 
 import { BaseResponseSchema, parseTypeBox, generateDefaultFromTypeBox } from '@/utils/typebox';
 import { Type } from '@sinclair/typebox';
@@ -43,10 +43,9 @@ const OneBotApiDebug = forwardRef<OneBotApiDebugRef, OneBotApiDebugProps>((props
   const currentURL = new URL(window.location.origin);
   currentURL.port = '3000';
   const defaultHttpUrl = currentURL.href;
-  const defaultToken = localStorage.getItem('token') || '';
   const [httpConfig, setHttpConfig] = useLocalStorage(key.httpDebugConfig, {
     url: defaultHttpUrl,
-    token: defaultToken,
+    token: '',
   });
 
   const [requestBody, setRequestBody] = useState('{}');
@@ -97,13 +96,9 @@ const OneBotApiDebug = forwardRef<OneBotApiDebugRef, OneBotApiDebugProps>((props
 
       // 如果有 adapterName，走后端转发
       if (adapterName) {
-        request.post(`/api/Debug/call/${adapterName}`, {
+        serverRequest.post(`/Debug/call/${adapterName}`, {
           action: path,
           params: parsedRequestBody,
-        }, {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
-          },
         }).then((res) => {
           if (res.data.code === 0) {
             setResponseContent(JSON.stringify(res.data.data, null, 2));

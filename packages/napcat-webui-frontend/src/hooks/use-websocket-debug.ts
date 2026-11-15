@@ -1,3 +1,4 @@
+import { checkSessionAfterDisconnect } from '@/utils/auth';
 import type { Selection } from '@react-types/shared';
 import { useCallback, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -41,6 +42,9 @@ export function useWebSocketDebug (url: string, token: string, connectOnMount: b
       access_token: token,
     },
     onError: (event) => {
+      if (new URL(url, window.location.href).origin.replace(/^ws/, 'http') === window.location.origin) {
+        checkSessionAfterDisconnect();
+      }
       toast.error('WebSocket 连接失败');
       console.error('WebSocket error:', event);
     },

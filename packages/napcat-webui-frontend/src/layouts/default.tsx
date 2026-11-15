@@ -14,7 +14,7 @@ import errorFallbackRender from '@/components/error_fallback';
 import PageLoading from '@/components/page_loading';
 import SideBar from '@/components/sidebar';
 
-import useAuth from '@/hooks/auth';
+import { signOut } from '@/utils/auth';
 import useDialog from '@/hooks/use-dialog';
 
 import type { MenuItem } from '@/config/site';
@@ -51,17 +51,15 @@ const Layout: React.FC<{ children: React.ReactNode; }> = ({ children }) => {
   const [openSideBar, setOpenSideBar] = useLocalStorage(key.sideBarOpen, true);
   const [b64img] = useLocalStorage(key.backgroundImage, '');
   const navigate = useNavigate();
-  const { isAuth, revokeAuth } = useAuth();
   const dialog = useDialog();
   const isOnlineRef = useRef(true);
   const [isRestarting, setIsRestarting] = useState(false);
 
   // 定期检查 QQ 在线状态，掉线时弹窗提示
   useEffect(() => {
-    if (!isAuth) return;
     const checkOnlineStatus = async () => {
       const currentPath = location.pathname;
-      if (currentPath === '/qq_login' || currentPath === '/web_login') return;
+      if (currentPath === '/qq_login') return;
       try {
         const info = await QQManager.getQQLoginInfo();
         if (info?.online === false && isOnlineRef.current === true) {
@@ -96,8 +94,7 @@ const Layout: React.FC<{ children: React.ReactNode; }> = ({ children }) => {
               );
             },
             onCancel: () => {
-              revokeAuth();
-              navigate('/web_login');
+              signOut();
             },
           });
         } else if (info?.online === true) {
@@ -110,7 +107,7 @@ const Layout: React.FC<{ children: React.ReactNode; }> = ({ children }) => {
     const timer = setInterval(checkOnlineStatus, 5000);
     checkOnlineStatus();
     return () => clearInterval(timer);
-  }, [isAuth, location.pathname]);
+  }, [location.pathname]);
 
   const checkIsQQLogin = async () => {
     try {
@@ -121,14 +118,10 @@ const Layout: React.FC<{ children: React.ReactNode; }> = ({ children }) => {
         isOnlineRef.current = false;
       } else if (!result.isLogin) {
         // 未登录状态：跳转到登录页面
-        if (isAuth) {
-          navigate('/qq_login', { replace: true });
-        } else {
-          navigate('/web_login', { replace: true });
-        }
+        navigate('/qq_login', { replace: true });
       }
     } catch (_error) {
-      navigate('/web_login', { replace: true });
+      // Request handling redirects expired OAuth sessions.
     }
   };
   useEffect(() => {
@@ -138,10 +131,8 @@ const Layout: React.FC<{ children: React.ReactNode; }> = ({ children }) => {
     });
   }, [location.pathname]);
   useEffect(() => {
-    if (isAuth) {
-      checkIsQQLogin();
-    }
-  }, [isAuth]);
+    checkIsQQLogin();
+  }, []);
   const title = useMemo(() => {
     return findTitle(menus, location.pathname);
   }, [location.pathname]);
