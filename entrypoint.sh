@@ -195,8 +195,10 @@ sleep 2
 
 export DISPLAY=:1
 cd /app/napcat
+# gosu execs QQ in its own process; the outer exec replaces Bash too, so QQ
+# becomes PID 1 and receives container termination signals directly.
 if [ -n "${ACCOUNT}" ]; then
-    gosu napcat /opt/QQ/qq --no-sandbox -q $ACCOUNT
+    exec gosu napcat /opt/QQ/qq --no-sandbox -q "$ACCOUNT"
 else
-    gosu napcat /opt/QQ/qq --no-sandbox
+    exec gosu napcat /opt/QQ/qq --no-sandbox
 fi
