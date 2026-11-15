@@ -209,6 +209,7 @@ export default function QQLoginPage () {
     try {
       const data = await QQManager.checkQQLoginStatusWithQrcode();
       setLoginPhase(data.loginPhase || (data.isLogin ? 'ready' : 'waiting_qrcode'));
+      if (data.sessionExpired || data.loginPhase === 'qrcode_failed') setActiveTab('qrcode');
       if (data.loginPhase === 'reconnecting') {
         setIsRecoveringLoginService(true);
       }
@@ -236,7 +237,8 @@ export default function QQLoginPage () {
           const isRecovering = data.loginPhase === 'reconnecting' || isRecoveringLoginService;
           const isQrCodeExpired = friendlyMsg.includes('二维码') && (friendlyMsg.includes('过期') || friendlyMsg.includes('失效'));
 
-          if (!isRecovering && (!isQrCodeExpired || activeTab === 'qrcode')) {
+          const isInlineFailure = data.sessionExpired || data.loginPhase === 'qrcode_failed';
+          if (!isRecovering && !isInlineFailure && (!isQrCodeExpired || activeTab === 'qrcode')) {
             dialog.alert({
               title: '登录失败',
               content: friendlyMsg,

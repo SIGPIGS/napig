@@ -99,14 +99,14 @@ export const QQGetQRcodeHandler: RequestHandler = async (_, res) => {
 export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
   // 从 OneBot 上下文获取实时的 selfInfo.online 状态
   const oneBotContext = WebUiDataRuntime.getOneBotContext();
-  const selfInfo = oneBotContext?.core?.selfInfo;
-  const isOnline = selfInfo?.online;
+  const isOnline = oneBotContext?.core?.isOnline;
+  const sessionExpiredReason = oneBotContext?.core?.sessionExpiredReason || WebUiDataRuntime.getQQSessionExpiredReason();
   const qqLoginStatus = WebUiDataRuntime.getQQLoginStatus();
   const loginPhase = WebUiDataRuntime.getQQLoginPhase();
   // 必须同时满足：已登录且在线（online 必须明确为 true）
   // 登录状态以 QQ 登录成功和 Core 明确在线为准。loginPhase 用于展示进度，
   // 不能作为跳转的额外门槛，否则 phase 事件延迟时会卡在扫码页。
-  const isLogin = qqLoginStatus && isOnline === true;
+  const isLogin = !sessionExpiredReason && qqLoginStatus && isOnline === true;
   // 检测掉线状态：已登录但不在线
   const isOffline = qqLoginStatus && isOnline === false;
   const data = {
@@ -114,9 +114,11 @@ export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
     isOffline,
     loginPhase,
     qrLoginAccepted: qqLoginStatus && (loginPhase === 'qrcode_scanned' || loginPhase === 'initializing'),
-    coreReady: qqLoginStatus && isOnline === true,
+    coreReady: isLogin,
+    sessionExpired: !!sessionExpiredReason,
+    sessionExpiredReason,
     qrcodeurl: WebUiDataRuntime.getQQLoginQrcodeURL(),
-    loginError: WebUiDataRuntime.getQQLoginError(),
+    loginError: WebUiDataRuntime.getQQLoginError() || sessionExpiredReason,
   };
   return sendSuccess(res, data);
 };
@@ -164,7 +166,7 @@ export const getQQLoginInfoHandler: RequestHandler = async (_, res) => {
   // 从 OneBot 上下文获取实时的 selfInfo.online 状态
   const oneBotContext = WebUiDataRuntime.getOneBotContext();
   const selfInfo = oneBotContext?.core?.selfInfo;
-  const online = selfInfo?.online ?? undefined;
+  const online = oneBotContext?.core?.isOnline ?? undefined;
   const avatarUrl = selfInfo?.avatarUrl;
   const data = {
     ...basicInfo,

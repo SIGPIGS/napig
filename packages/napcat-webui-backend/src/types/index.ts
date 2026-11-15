@@ -29,11 +29,16 @@ export enum NapCatCoreWorkingEnv {
   Framework = 2,
 }
 
+export interface RestartProcessOptions {
+  sessionExpiredReason?: string;
+}
+
 export type QQLoginPhase =
   | 'waiting_phone_confirm'
   | 'waiting_qrcode'
   | 'generating_qrcode'
   | 'qrcode_scanned'
+  | 'qrcode_failed'
   | 'initializing'
   | 'ready'
   | 'offline'
@@ -59,7 +64,7 @@ export interface LoginRuntimeType {
     onCaptchaLoginRequested: (uin: string, passwordMd5: string, ticket: string, randstr: string, sid: string) => Promise<{ result: boolean; message: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;
     onNewDeviceLoginRequested: (uin: string, passwordMd5: string, newDevicePullQrCodeSig: string) => Promise<{ result: boolean; message: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;
     onOB11ConfigChanged: (ob11: OneBotConfig) => Promise<void>;
-    onRestartProcessRequested: () => Promise<{ result: boolean; message: string; }>;
+    onRestartProcessRequested: (options?: RestartProcessOptions) => Promise<{ result: boolean; message: string; }>;
     QQLoginList: string[];
     NewQQLoginList: LoginListItem[];
   };

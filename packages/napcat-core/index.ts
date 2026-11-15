@@ -1,3 +1,4 @@
+import { QQSessionValidity } from './helper/session-validity';
 import {
   NTQQFileApi,
   NTQQFriendApi,
@@ -138,6 +139,27 @@ export class NapCatCore {
   apis: StableNTApiWrapper;
   // runtime info, not readonly
   selfInfo: SelfInfo;
+  private readonly sessionValidity = new QQSessionValidity();
+
+  get sessionExpiredReason (): string {
+    return this.sessionValidity.reason;
+  }
+
+  get isOnline (): boolean {
+    return this.sessionValidity.isOnline(this.selfInfo.online);
+  }
+
+  setOnline (online: boolean): void {
+    this.selfInfo.online = this.sessionValidity.isOnline(online);
+  }
+
+  expireSession (reason: string): void {
+    if (!this.sessionValidity.expire(reason)) return;
+    this.selfInfo.online = false;
+    this.context.logger.logError('[Core] [SessionExpired]', this.sessionExpiredReason);
+    this.event.emit('SessionExpired', this.sessionExpiredReason);
+  }
+
   util: NodeQQNTWrapperUtil;
   configLoader: NapCatConfigLoader;
   /** 数据库 passphrase，由 OidbSvcTrpcTcp.0xcde_2 包获取 */
@@ -280,6 +302,7 @@ export class NapCatCore {
     profileListener.onProfileDetailInfoChanged = (profile) => {
       if (profile.uid === this.selfInfo.uid) {
         Object.assign(this.selfInfo, profile);
+        this.setOnline(this.selfInfo.online === true);
       }
     };
     profileListener.onSelfStatusChanged = (Info: SelfStatusInfo) => {
@@ -293,7 +316,7 @@ export class NapCatCore {
           this.event.emit('SelfOffline', '[SelfOffline] 账号状态变更为离线（未收到 KickedOffLine 通知）');
         }
       } else {
-        this.selfInfo.online = true;
+        this.setOnline(true);
       }
     };
     this.context.session.getProfileService().addKernelProfileListener(

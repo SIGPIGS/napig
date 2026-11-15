@@ -1,10 +1,12 @@
 import { napCatVersion } from 'napcat-common/src/version';
-import { NapCatCoreWorkingEnv, type LoginRuntimeType, type QQLoginPhase } from '../types';
+import { NapCatCoreWorkingEnv, type LoginRuntimeType, type QQLoginPhase, type RestartProcessOptions } from '../types';
+
+let sessionExpiredReason = process.env['NAPCAT_SESSION_EXPIRED_REASON'] || '';
 
 const LoginRuntime: LoginRuntimeType = {
   workingEnv: NapCatCoreWorkingEnv.Unknown,
   QQLoginStatus: false, // 已实现 但太傻了 得去那边注册个回调刷新
-  QQLoginPhase: 'waiting_qrcode',
+  QQLoginPhase: sessionExpiredReason ? 'reconnecting' : 'waiting_qrcode',
   QQQRCodeURL: '',
   QQLoginUin: '',
   QQLoginInfo: {
@@ -49,7 +51,21 @@ const LoginRuntime: LoginRuntimeType = {
 
   },
 };
+function beginExplicitLogin () {
+  if (LoginRuntime.QQLoginPhase !== 'qrcode_failed') return;
+  LoginRuntime.QQLoginPhase = 'waiting_qrcode';
+  LoginRuntime.QQLoginError = '';
+}
+
 export const WebUiDataRuntime = {
+  getQQSessionExpiredReason (): string {
+    return sessionExpiredReason;
+  },
+
+  setQQSessionExpiredReason (reason: string): void {
+    sessionExpiredReason = reason;
+  },
+
   setWorkingEnv (env: NapCatCoreWorkingEnv): void {
     LoginRuntime.workingEnv = env;
   },
@@ -122,6 +138,7 @@ export const WebUiDataRuntime = {
   },
 
   requestQuickLogin: function (uin) {
+    beginExplicitLogin();
     return LoginRuntime.NapCatHelper.onQuickLoginRequested(uin);
   } as LoginRuntimeType['NapCatHelper']['onQuickLoginRequested'],
 
@@ -130,6 +147,7 @@ export const WebUiDataRuntime = {
   },
 
   requestPasswordLogin: function (uin: string, passwordMd5: string) {
+    beginExplicitLogin();
     return LoginRuntime.NapCatHelper.onPasswordLoginRequested(uin, passwordMd5);
   } as LoginRuntimeType['NapCatHelper']['onPasswordLoginRequested'],
 
@@ -192,12 +210,12 @@ export const WebUiDataRuntime = {
     return LoginRuntime.OneBotContext;
   },
 
-  setRestartProcessCall (func: () => Promise<{ result: boolean; message: string; }>): void {
+  setRestartProcessCall (func: (options?: RestartProcessOptions) => Promise<{ result: boolean; message: string; }>): void {
     LoginRuntime.NapCatHelper.onRestartProcessRequested = func;
   },
 
-  requestRestartProcess: async function () {
-    return await LoginRuntime.NapCatHelper.onRestartProcessRequested();
+  requestRestartProcess: async function (options?: RestartProcessOptions) {
+    return await LoginRuntime.NapCatHelper.onRestartProcessRequested(options);
   },
 
   setQQLoginError (error: string): void {

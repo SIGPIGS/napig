@@ -26,8 +26,8 @@ export default class GetStatus extends OneBotAction<void, GetStatusReturnType> {
 
   async _handle (): Promise<GetStatusReturnType> {
     return {
-      online: !!this.core.selfInfo.online,
-      good: true,
+      online: this.core.isOnline,
+      good: !this.core.sessionExpiredReason,
       stat: {},
     };
   }

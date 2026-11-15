@@ -23,6 +23,8 @@ export default class QQManager {
       ServerResponse<{
         isLogin: boolean;
         isOffline?: boolean;
+        sessionExpired?: boolean;
+        sessionExpiredReason?: string;
         qrcodeurl: string;
       }>
     >('/QQLogin/CheckLoginStatus');
@@ -36,8 +38,10 @@ export default class QQManager {
         qrcodeurl: string;
         isLogin: boolean;
         isOffline?: boolean;
+        sessionExpired?: boolean;
+        sessionExpiredReason?: string;
         loginError?: string;
-        loginPhase?: 'waiting_phone_confirm' | 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
+        loginPhase?: 'waiting_phone_confirm' | 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'qrcode_failed' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
         qrLoginAccepted?: boolean;
         coreReady?: boolean;
       }>

@@ -30,7 +30,7 @@ export class OB11WebSocketClientAdapter extends IOB11NetworkAdapter<WebsocketCli
     if (this.config.heartInterval > 0) {
       this.heartbeatRef = setInterval(() => {
         if (this.connection && this.connection.readyState === WebSocket.OPEN) {
-          this.connection.send(JSON.stringify(new OB11HeartbeatEvent(this.core, this.config.heartInterval, this.core.selfInfo.online ?? true, true)));
+          this.connection.send(JSON.stringify(new OB11HeartbeatEvent(this.core, this.config.heartInterval, this.core.isOnline, !this.core.sessionExpiredReason)));
         }
       }, this.config.heartInterval);
     }
@@ -192,7 +192,7 @@ export class OB11WebSocketClientAdapter extends IOB11NetworkAdapter<WebsocketCli
       if (newConfig.heartInterval > 0 && this.isEnable) {
         this.heartbeatRef = setInterval(() => {
           if (this.connection && this.connection.readyState === WebSocket.OPEN) {
-            this.connection.send(JSON.stringify(new OB11HeartbeatEvent(this.core, newConfig.heartInterval, this.core.selfInfo.online ?? true, true)));
+            this.connection.send(JSON.stringify(new OB11HeartbeatEvent(this.core, newConfig.heartInterval, this.core.isOnline, !this.core.sessionExpiredReason)));
           }
         }, newConfig.heartInterval);
       }

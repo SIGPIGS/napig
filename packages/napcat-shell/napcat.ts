@@ -4,6 +4,7 @@ import { LogWrapper } from '@/napcat-core/helper/log';
 import { connectToNamedPipe } from './pipe';
 import { WebUiDataRuntime } from '@/napcat-webui-backend/src/helper/Data';
 import { webUiRuntimePort } from '@/napcat-webui-backend/index';
+import { createSessionRecoveryBudget } from './session-recovery';
 import { createProcessManager, type IProcessManager, type IWorkerProcess } from './process-api';
 import path from 'path';
 import fs from 'fs';
@@ -43,6 +44,7 @@ const ENV = {
 interface WorkerMessage {
   type: 'restart' | 'restart-prepare' | 'shutdown' | 'login-success';
   port?: number;
+  sessionExpiredReason?: string;
 }
 
 const logger = new LogWrapper(pathWrapper.logsPath);
@@ -55,6 +57,9 @@ let processManager: IProcessManager | null = null;
 let currentWorker: IWorkerProcess | null = null;
 let isElectron = false;
 let isRestarting = false;
+let sessionExpiredReason = process.env['NAPCAT_SESSION_EXPIRED_REASON'] || '';
+let allowRecoveryQuickLogin = false;
+const requestAutomaticRecovery = createSessionRecoveryBudget();
 let isShuttingDown = false;
 
 // 进程崩溃保护：记录最近的异常退出时间戳
@@ -111,102 +116,66 @@ function forceKillProcess (pid: number): void {
 }
 
 /**
- * 清理进程树中的残留子进程（Electron 模式专用）
- * 排除当前主进程和新 worker 进程
- */
-async function cleanupOrphanedProcesses (excludePids: number[]): Promise<void> {
-  if (!isElectron) return;
-
-  try {
-    // 使用 Electron 的 app.getAppMetrics() 获取所有相关进程
-    // @ts-ignore - electron 运行时存在但类型声明可能缺失
-    const electron = await import('electron');
-    if (electron.app && typeof electron.app.getAppMetrics === 'function') {
-      const metrics = electron.app.getAppMetrics();
-      const mainPid = process.pid;
-
-      for (const metric of metrics) {
-        const pid = metric.pid;
-        // 排除主进程、新 worker 进程和明确排除的 PID
-        if (pid === mainPid || excludePids.includes(pid)) {
-          continue;
-        }
-        // 尝试终止残留进程
-        try {
-          process.kill(pid, 'SIGTERM');
-          logger.log(`[NapCat] [Process] 已清理残留进程: PID ${pid} (${metric.type})`);
-        } catch {
-          // 进程可能已经不存在，忽略错误
-        }
-      }
-    }
-  } catch (error) {
-    // Electron API 不可用或出错，静默忽略
-    logger.logDebug?.('[NapCat] [Process] 清理残留进程时出错:', error);
-  }
-}
-
-/**
  * 重启 Worker 进程
  */
-export async function restartWorker (port?: number): Promise<void> {
+export async function restartWorker (port?: number, expiredReason?: string): Promise<void> {
+  if (expiredReason && !sessionExpiredReason) {
+    sessionExpiredReason = expiredReason;
+    allowRecoveryQuickLogin = requestAutomaticRecovery();
+  }
+  if (isRestarting) return;
   isRestarting = true;
 
-  if (!currentWorker) {
-    logger.logWarn('[NapCat] [Process] 没有运行中的Worker进程');
-    await startWorker(false);
-    isRestarting = false;
-    return;
-  }
-
-  const workerPid = currentWorker.pid;
-
-  // 1. 通知旧进程准备重启（旧进程会自行退出）
-  currentWorker.postMessage({ type: 'restart-prepare' });
-
-  // 2. 等待进程退出（最多 5 秒，给更多时间让进程自行清理）
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      logger.logWarn('[NapCat] [Process] Worker进程未在 5 秒内退出，尝试发送强制关闭信号');
-      currentWorker?.postMessage({ type: 'shutdown' });
-
-      // 再等待 2 秒
-      setTimeout(() => {
-        logger.logWarn('[NapCat] [Process] Worker进程仍未退出，尝试 kill');
-        currentWorker?.kill();
-        resolve();
-      }, 2000);
-    }, 5000);
-
-    currentWorker?.once('exit', () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-  });
-
-  // 3. 二次确认进程是否真的被终止（兜底检查）
-  if (workerPid && isProcessAlive(workerPid)) {
-    logger.logWarn(`[NapCat] [Process] 进程 ${workerPid} 仍在运行，尝试强制杀掉`);
-    forceKillProcess(workerPid);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    if (isProcessAlive(workerPid)) {
-      logger.logError(`[NapCat] [Process] 进程 ${workerPid} 无法终止，可能需要手动处理`);
+  try {
+    if (!currentWorker) {
+      logger.logWarn('[NapCat] [Process] 没有运行中的Worker进程');
+      await startWorker(false);
+      return;
     }
+
+    const workerPid = currentWorker.pid;
+
+    // 1. 通知旧进程准备重启（旧进程会自行退出）
+    currentWorker.postMessage({ type: 'restart-prepare' });
+
+    // 2. 等待进程退出（最多 5 秒，给更多时间让进程自行清理）
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        logger.logWarn('[NapCat] [Process] Worker进程未在 5 秒内退出，尝试发送强制关闭信号');
+        currentWorker?.postMessage({ type: 'shutdown' });
+
+        // 再等待 2 秒
+        setTimeout(() => {
+          logger.logWarn('[NapCat] [Process] Worker进程仍未退出，尝试 kill');
+          currentWorker?.kill();
+          resolve();
+        }, 2000);
+      }, 5000);
+
+      currentWorker?.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+
+    // 3. 二次确认进程是否真的被终止（兜底检查）
+    if (workerPid && isProcessAlive(workerPid)) {
+      logger.logWarn(`[NapCat] [Process] 进程 ${workerPid} 仍在运行，尝试强制杀掉`);
+      forceKillProcess(workerPid);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (isProcessAlive(workerPid)) {
+        logger.logError(`[NapCat] [Process] 进程 ${workerPid} 无法终止，可能需要手动处理`);
+      }
+    }
+
+    // 4. 等待后启动新进程
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // 5. 启动新进程（重启模式不传递快速登录参数，保留端口）
+    await startWorker(false, port);
+  } finally {
+    isRestarting = false;
   }
-
-  // 4. 等待后启动新进程
-  await new Promise(resolve => setTimeout(resolve, 3000));
-
-  // 5. 启动新进程（重启模式不传递快速登录参数，保留端口）
-  await startWorker(false, port);
-
-  // 6. Electron 模式下清理可能残留的子进程
-  if (isElectron && currentWorker?.pid) {
-    const excludePids = [process.pid, currentWorker.pid];
-    await cleanupOrphanedProcesses(excludePids);
-  }
-
-  isRestarting = false;
 }
 
 /**
@@ -222,9 +191,13 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
   const workerScript = getWorkerScriptPath();
   const processType = getProcessTypeName();
 
-  // 只在首次启动时传递 -q 或 --qq 参数给 worker 进程
+  // An expiry recovery may reuse the configured account once. Consume this
+  // permission at spawn so a Worker crash cannot repeat the same attempt.
+  const recoveryQuickLogin = !!sessionExpiredReason && allowRecoveryQuickLogin;
+  if (sessionExpiredReason) logger.logWarn('[NapCat] [Process] 身份失效恢复', { automaticQuickLogin: recoveryQuickLogin });
+  // 常规启动和获准的身份恢复传递 -q 或 --qq 参数。
   const workerArgs: string[] = [];
-  if (passQuickLogin) {
+  if ((passQuickLogin && !sessionExpiredReason) || recoveryQuickLogin) {
     const args = process.argv.slice(2);
     const qIndex = args.findIndex(arg => arg === '-q' || arg === '--qq');
     if (qIndex !== -1 && qIndex + 1 < args.length) {
@@ -240,11 +213,14 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
     env: {
       ...process.env,
       NAPCAT_WORKER_PROCESS: '1',
+      NAPCAT_SESSION_EXPIRED_REASON: sessionExpiredReason,
+      NAPCAT_RECOVERY_QUICK_LOGIN: recoveryQuickLogin ? '1' : '0',
       ...(preferredPort ? { NAPCAT_WEBUI_PREFERRED_PORT: String(preferredPort) } : {}),
     },
     stdio: isElectron ? 'pipe' : ['inherit', 'pipe', 'pipe', 'ipc'],
   });
 
+  allowRecoveryQuickLogin = false;
   currentWorker = child;
 
   // 监听标准输出（直接转发）
@@ -263,14 +239,16 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
 
   // 监听子进程消息
   child.on('message', (msg: unknown) => {
+    if (currentWorker !== child) return;
     // 处理重启请求
     if (typeof msg === 'object' && msg !== null && 'type' in msg) {
       const message = msg as WorkerMessage;
       if (message.type === 'restart') {
-        restartWorker(message.port).catch(e => {
+        restartWorker(message.port, message.sessionExpiredReason).catch(e => {
           logger.logError(`[NapCat] [${processType}] 重启Worker进程失败:`, e);
         });
       } else if (message.type === 'login-success') {
+        sessionExpiredReason = '';
         logger.log(`[NapCat] [${processType}] Worker进程已登录成功，切换到正常重试策略`);
       }
     }
@@ -388,11 +366,12 @@ async function startWorkerProcess (): Promise<void> {
   });
 
   // 注册重启进程函数到 WebUI
-  WebUiDataRuntime.setRestartProcessCall(async () => {
+  WebUiDataRuntime.setRestartProcessCall(async (options) => {
     try {
       const success = processManager!.sendToParent({
         type: 'restart',
         port: webUiRuntimePort,
+        sessionExpiredReason: options?.sessionExpiredReason,
       });
 
       if (success) {
@@ -409,8 +388,9 @@ async function startWorkerProcess (): Promise<void> {
     }
   });
 
-  // 启动 NapCat 核心
+  // Core 和适配器就绪后，两个进程后端都必须通知 Master 清除恢复标记。
   await NCoreInitShell();
+  if (!WebUiDataRuntime.getQQSessionExpiredReason()) processManager!.sendToParent({ type: 'login-success' });
 }
 
 /**

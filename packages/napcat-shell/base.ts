@@ -124,7 +124,8 @@ function configureLoginPreferences (
 }
 
 function requestLoginQRCode (loginService: NodeIKernelLoginService, logger: LogWrapper) {
-  if (WebUiDataRuntime.getQQLoginPhase() === 'waiting_phone_confirm') return false;
+  if (['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return false;
+  process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] = '0';
   // Reapply after the login service is connected, immediately before QR creation.
   configureLoginPreferences(loginService, logger, 'beforeQRCode');
   return loginService.getQRCodePicture();
@@ -205,13 +206,16 @@ function prepareLogin (
     WebUiDataRuntime.setQQLoginError(tips);
   };
   loginListener.onQRCodeLoginSucceed = async (loginResult) => {
+    if (WebUiDataRuntime.getOneBotContext()?.core?.sessionExpiredReason || WebUiDataRuntime.getQQLoginPhase() === 'qrcode_failed') return;
+    WebUiDataRuntime.setQQSessionExpiredReason('');
+    process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] = '0';
     context.cancelQuickLogin?.();
     context.isLogined = true;
     WebUiDataRuntime.setQQLoginStatus(true);
     WebUiDataRuntime.setQQLoginError('');
     const oneBotContext = WebUiDataRuntime.getOneBotContext();
     if (oneBotContext?.core?.selfInfo) {
-      oneBotContext.core.selfInfo.online = true;
+      oneBotContext.core.setOnline(true);
       WebUiDataRuntime.setQQLoginPhase('ready');
     } else {
       WebUiDataRuntime.setQQLoginPhase('initializing');
@@ -248,7 +252,7 @@ function prepareLogin (
     logger.log('[Core] [Login] onLoginConnecting', { msfStatus: loginService.getMsfStatus() });
   };
   loginListener.onQRCodeGetPicture = ({ pngBase64QrcodeData, qrcodeUrl }) => {
-    if (WebUiDataRuntime.getQQLoginPhase() === 'waiting_phone_confirm') return;
+    if (['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
     WebUiDataRuntime.setQQLoginQrcodeURL(qrcodeUrl);
     WebUiDataRuntime.setQQLoginError('');
     WebUiDataRuntime.setQQLoginPhase('waiting_qrcode');
@@ -279,14 +283,21 @@ function prepareLogin (
   };
 
   loginListener.onQRCodeSessionUserScaned = () => {
-    if (WebUiDataRuntime.getQQLoginPhase() === 'waiting_phone_confirm') return;
+    if (['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
     WebUiDataRuntime.setQQLoginPhase('qrcode_scanned');
     logger.log('[Core] [Login] 二维码已被扫描，等待确认...');
   };
 
   loginListener.onQRCodeSessionFailed = (errType: number, errCode: number) => {
-    if (!context.isLogined && WebUiDataRuntime.getQQLoginPhase() !== 'waiting_phone_confirm') {
+    if (!context.isLogined && !['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) {
       logger.logError('[Core] [Login] Login Error,ErrType: ', errType, ' ErrCode:', errCode);
+      if (errType === 1 && errCode === 5) {
+        WebUiDataRuntime.setQQLoginStatus(false);
+        WebUiDataRuntime.setQQLoginQrcodeURL('');
+        WebUiDataRuntime.setQQLoginPhase('qrcode_failed');
+        WebUiDataRuntime.setQQLoginError('手机端未完成本次扫码登录，请刷新二维码后重新扫码');
+        return;
+      }
       if (errType === 1 && errCode === 3) {
         // 仅二维码过期时自动请求下一张二维码。账号被踢下线等其他错误
         // 需要由用户触发刷新，避免每两秒重复创建原生登录会话。
@@ -483,6 +494,7 @@ async function handleLoginInner (context: LoginContext, logger: LogWrapper, logi
     });
   });
   const tryPasswordFallbackLogin = async (uin: string): Promise<{ success: boolean, attempted: boolean; }> => {
+    if (WebUiDataRuntime.getQQSessionExpiredReason()) return { success: false, attempted: false };
     const quickPasswordMd5 = resolveQuickPasswordMd5();
     if (!quickPasswordMd5) {
       logger.log(`QQ ${uin} 未配置回退密码环境变量，建议优先使用 ACCOUNT + NAPCAT_QUICK_PASSWORD（NAPCAT_QUICK_PASSWORD_MD5 作为备用），将使用二维码登录方式`);
@@ -622,7 +634,9 @@ async function handleLoginInner (context: LoginContext, logger: LogWrapper, logi
       }
     });
   });
-  if (quickLoginUin) {
+  if (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') {
+    requestLoginQRCode(loginService, logger);
+  } else if (quickLoginUin) {
     const savedAccount = historyLoginList.find(u => u.uin === quickLoginUin);
     logger.log('[Core] [Login] 快速登录凭据状态', {
       uin: quickLoginUin,
@@ -865,12 +879,6 @@ export async function NCoreInitShell () {
 
   const selfInfo = await login.start(quickLoginUin, historyLoginList);
 
-  // 登录成功后通知 Master 进程（用于切换崩溃重试策略）
-  if (typeof process.send === 'function') {
-    process.send({ type: 'login-success' });
-    logger.log('[NapCat] 已通知主进程登录成功');
-  }
-
   const amgomDataPiece = 'eb1fd6ac257461580dc7438eb099f23aae04ca679f4d88f53072dc56e3bb1129';
   o3Service.setAmgomDataPiece(basicInfoWrapper.QQVersionAppid, new Uint8Array(Buffer.from(amgomDataPiece, 'hex')));
 
@@ -966,10 +974,11 @@ export class NapCatShell {
 
     // 监听下线并同步到 WebUI
     // KickedOffLine：账号被踢下线；SelfOffline：静默离线（服务端会话语义失效但无通知）。
-    // 两者复用同一条恢复链路：同步 WebUI -> 重启 Worker -> 快速登录。
+    // 下线和身份失效共用恢复调度；主进程限制身份失效后的快速登录次数。
     const handleOffline = createOfflineRecovery({
-      isOnline: () => this.core.selfInfo.online === true,
+      isOnline: () => this.core.isOnline,
       onOffline: (tips) => {
+        if (this.core.sessionExpiredReason) WebUiDataRuntime.setQQSessionExpiredReason(this.core.sessionExpiredReason);
         WebUiDataRuntime.setQQLoginStatus(false);
         // 下线后的二维码已失效，绝不能继续交给页面展示或扫码。
         WebUiDataRuntime.setQQLoginQrcodeURL('');
@@ -983,7 +992,7 @@ export class NapCatShell {
       },
       restart: async (tips) => {
         try {
-          const restartResult = await WebUiDataRuntime.requestRestartProcess();
+          const restartResult = await WebUiDataRuntime.requestRestartProcess({ sessionExpiredReason: this.core.sessionExpiredReason });
           this.context.logger.logWarn('[Core] [Login] 账号已离线，正在重启 Worker 以重新创建 QQ 登录服务', restartResult);
           if (restartResult.result) return true;
           WebUiDataRuntime.setQQLoginPhase('offline');
@@ -997,6 +1006,7 @@ export class NapCatShell {
     });
     this.core.event.on('KickedOffLine', (tips: string) => handleOffline(tips, false));
     this.core.event.on('SelfOffline', (tips: string) => handleOffline(tips, true));
+    this.core.event.on('SessionExpired', (tips: string) => handleOffline(tips, false));
     // 使用 NapCatAdapterManager 统一管理协议适配器
     const adapterManager = new NapCatAdapterManager(this.core, this.context, this.context.pathWrapper);
     await adapterManager.initAdapters()

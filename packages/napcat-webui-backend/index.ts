@@ -108,6 +108,7 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
   }
   WebUiDataRuntime.setWebUiConfigQuickFunction(
     async () => {
+      if (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') return;
       const autoLoginAccount = process.env['NAPCAT_QUICK_ACCOUNT'] || WebUiConfig.getAutoLoginAccount();
       const resolveQuickPasswordMd5 = (): string | undefined => {
         const quickPasswordMd5FromEnv = process.env['NAPCAT_QUICK_PASSWORD_MD5']?.trim();
@@ -142,6 +143,7 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
         console.log('[NapCat] [WebUi] 自动快速登录异常:' + error);
       }
 
+      if (WebUiDataRuntime.getQQSessionExpiredReason()) return;
       if (!quickPasswordMd5) {
         console.log(`[NapCat] [WebUi] QQ ${autoLoginAccount} 未配置回退密码环境变量，建议优先使用 ACCOUNT + NAPCAT_QUICK_PASSWORD（NAPCAT_QUICK_PASSWORD_MD5 作为备用），保持二维码登录兜底`);
         return;

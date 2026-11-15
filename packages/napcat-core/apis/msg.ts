@@ -1,3 +1,4 @@
+import { isSessionExpiredResult } from '@/napcat-core/helper/session-validity';
 import { ChatType, GetFileListParam, Peer, RawMessage, SendMessageElement, SendStatusType } from '@/napcat-core/types';
 import { GroupFileInfoUpdateItem, InstanceContext, NapCatCore, NodeIKernelMsgService } from '@/napcat-core/index';
 import { GeneralCallResult } from '@/napcat-core/services/common';
@@ -242,6 +243,7 @@ export class NTQQMsgApi {
   }
 
   async sendMsg (peer: Peer, msgElements: SendMessageElement[], timeout = 10000) {
+    if (this.core.sessionExpiredReason) throw new Error(this.core.sessionExpiredReason);
     // 唉？！我有个想法
     if (peer.chatType === ChatType.KCHATTYPETEMPC2CFROMGROUP && peer.guildId && peer.guildId !== '') {
       const member = await this.core.apis.GroupApi.getGroupMember(peer.guildId, peer.peerUid);
@@ -260,7 +262,10 @@ export class NTQQMsgApi {
         msgElements,
         new Map(),
       ],
-      (ret) => ret.result === 0,
+      (ret) => {
+        if (isSessionExpiredResult(ret)) this.core.expireSession('QQ 登录身份已失效，请重新登录');
+        return ret.result === 0;
+      },
       msgRecords => {
         for (const msgRecord of msgRecords) {
           if (msgRecord.guildId === msgId && msgRecord.sendStatus === SendStatusType.KSEND_STATUS_SUCCESS) {

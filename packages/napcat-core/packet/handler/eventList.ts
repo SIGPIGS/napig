@@ -5,5 +5,6 @@ export interface AppEvents {
   KickedOffLine: string;
   // 静默离线：服务端会话已失效，但没有下发 KickedOffLine 通知
   SelfOffline: string;
+  SessionExpired: string;
 }
 export const appEvent = new TypedEventEmitter<AppEvents>();

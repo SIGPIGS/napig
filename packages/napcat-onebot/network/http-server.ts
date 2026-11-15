@@ -186,7 +186,7 @@ export class OB11HttpServerAdapter extends IOB11NetworkAdapter<HttpServerConfig>
     this.heartbeatIntervalId = setInterval(() => {
       this.wsClientWithEvent.forEach((wsClient) => {
         if (wsClient.readyState === WebSocket.OPEN) {
-          wsClient.send(JSON.stringify(new OB11HeartbeatEvent(this.core, 30000, this.core.selfInfo.online ?? true, true)));
+          wsClient.send(JSON.stringify(new OB11HeartbeatEvent(this.core, 30000, this.core.isOnline, !this.core.sessionExpiredReason)));
         }
       });
     }, 30000);

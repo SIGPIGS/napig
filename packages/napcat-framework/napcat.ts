@@ -101,12 +101,14 @@ export async function NCoreInitFramework (
     };
 
     loginListener.onQRCodeLoginSucceed = async (loginResult) => {
+      if (WebUiDataRuntime.getOneBotContext()?.core?.sessionExpiredReason || WebUiDataRuntime.getQQLoginPhase() === 'qrcode_failed') return;
+      WebUiDataRuntime.setQQSessionExpiredReason('');
       loginContext.isLogined = true;
       WebUiDataRuntime.setQQLoginStatus(true);
       WebUiDataRuntime.setQQLoginError('');
       const oneBotContext = WebUiDataRuntime.getOneBotContext();
       if (oneBotContext?.core?.selfInfo) {
-        oneBotContext.core.selfInfo.online = true;
+        oneBotContext.core.setOnline(true);
         WebUiDataRuntime.setQQLoginPhase('ready');
       } else {
         WebUiDataRuntime.setQQLoginPhase('initializing');
@@ -122,7 +124,13 @@ export async function NCoreInitFramework (
       });
     };
 
+    loginListener.onQRCodeSessionUserScaned = () => {
+      if (WebUiDataRuntime.getQQLoginPhase() === 'qrcode_failed') return;
+      WebUiDataRuntime.setQQLoginPhase('qrcode_scanned');
+    };
+
     loginListener.onQRCodeGetPicture = ({ qrcodeUrl }) => {
+      if (WebUiDataRuntime.getQQLoginPhase() === 'qrcode_failed') return;
       WebUiDataRuntime.setQQLoginQrcodeURL(qrcodeUrl);
       WebUiDataRuntime.setQQLoginError('');
       WebUiDataRuntime.setQQLoginPhase('waiting_qrcode');
@@ -130,8 +138,15 @@ export async function NCoreInitFramework (
     };
 
     loginListener.onQRCodeSessionFailed = (errType: number, errCode: number) => {
-      if (!loginContext.isLogined) {
+      if (!loginContext.isLogined && WebUiDataRuntime.getQQLoginPhase() !== 'qrcode_failed') {
         logger.logError('[NapCat] [Framework] [Login] QRCode Session Failed, ErrType:', errType, 'ErrCode:', errCode);
+        if (errType === 1 && errCode === 5) {
+          WebUiDataRuntime.setQQLoginStatus(false);
+          WebUiDataRuntime.setQQLoginQrcodeURL('');
+          WebUiDataRuntime.setQQLoginPhase('qrcode_failed');
+          WebUiDataRuntime.setQQLoginError('手机端未完成本次扫码登录，请刷新二维码后重新扫码');
+          return;
+        }
         if (errType === 1 && errCode === 3) {
           WebUiDataRuntime.setQQLoginError('二维码已过期，请刷新');
         }
@@ -217,10 +232,11 @@ export async function NCoreInitFramework (
 
   // 监听下线并同步到 WebUI（兜底保障，防止 WebUI 状态不同步）
   // KickedOffLine：账号被踢下线；SelfOffline：静默离线（服务端会话语义失效但无通知）。
-  // 两者复用同一条恢复链路：同步 WebUI -> 重启 Worker -> 快速登录。
+  // 下线和身份失效共用恢复调度；保留失效原因并禁止复活旧 Core。
   const handleOffline = createOfflineRecovery({
-    isOnline: () => loaderObject.core.selfInfo.online === true,
+    isOnline: () => loaderObject.core.isOnline,
     onOffline: (tips) => {
+      if (loaderObject.core.sessionExpiredReason) WebUiDataRuntime.setQQSessionExpiredReason(loaderObject.core.sessionExpiredReason);
       WebUiDataRuntime.setQQLoginStatus(false);
       // 下线后的二维码已失效，绝不能继续交给页面展示或扫码。
       WebUiDataRuntime.setQQLoginQrcodeURL('');
@@ -234,7 +250,7 @@ export async function NCoreInitFramework (
     },
     restart: async (tips) => {
       try {
-        const restartResult = await WebUiDataRuntime.requestRestartProcess();
+        const restartResult = await WebUiDataRuntime.requestRestartProcess({ sessionExpiredReason: loaderObject.core.sessionExpiredReason });
         logger.logWarn('[NapCat] [Framework] 账号已离线，正在重启 Worker 以重新创建 QQ 登录服务', restartResult);
         if (restartResult.result) return true;
         WebUiDataRuntime.setQQLoginPhase('offline');
@@ -248,6 +264,7 @@ export async function NCoreInitFramework (
   });
   loaderObject.core.event.on('KickedOffLine', (tips: string) => handleOffline(tips, false));
   loaderObject.core.event.on('SelfOffline', (tips: string) => handleOffline(tips, true));
+  loaderObject.core.event.on('SessionExpired', (tips: string) => handleOffline(tips, false));
 }
 
 function registerWebUiLoginCallbacks (
