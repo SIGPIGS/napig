@@ -115,7 +115,4 @@ export interface NodeIKernelLoginService {
 
   setRemerberPwd (remember: boolean): unknown;
 
-  online (): unknown;
-
-  offline (): unknown;
 }

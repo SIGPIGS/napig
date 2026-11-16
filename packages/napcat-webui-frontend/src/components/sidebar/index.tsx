@@ -29,8 +29,8 @@ const SideBar: React.FC<SideBarProps> = (props) => {
 
   const onRevokeAuth = () => {
     dialog.confirm({
-      title: '退出登录',
-      content: '确定要退出登录吗？',
+      title: '退出 WebUI',
+      content: '确定要退出 WebUI 登录吗？QQ 账号将继续运行。',
       onConfirm: signOut,
     });
   };
@@ -98,7 +98,7 @@ const SideBar: React.FC<SideBarProps> = (props) => {
                 onPress={onRevokeAuth}
                 startContent={<IoMdLogOut size={18} />}
               >
-                退出登录
+                退出 WebUI
               </Button>
             </div>
           </div>

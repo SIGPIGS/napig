@@ -100,6 +100,15 @@ export const QQGetQRcodeHandler: RequestHandler = async (_, res) => {
   return sendSuccess(res, data);
 };
 
+export const QQLogoutHandler: RequestHandler = async (_req, res) => {
+  try {
+    await WebUiDataRuntime.requestQQLogout();
+    return sendSuccess(res, { message: '正在退出 QQ 并重新启动登录服务' });
+  } catch (error) {
+    return sendError(res, error instanceof Error ? error.message : '退出 QQ 失败');
+  }
+};
+
 // 获取QQ登录状态
 export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
   // 从 OneBot 上下文获取实时的 selfInfo.online 状态
@@ -111,7 +120,7 @@ export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
   // 必须同时满足：已登录且在线（online 必须明确为 true）
   // 登录状态以 QQ 登录成功和 Core 明确在线为准。loginPhase 用于展示进度，
   // 不能作为跳转的额外门槛，否则 phase 事件延迟时会卡在扫码页。
-  const isLogin = !sessionExpiredReason && qqLoginStatus && isOnline === true;
+  const isLogin = !WebUiDataRuntime.isQQAccountSwitching() && !sessionExpiredReason && qqLoginStatus && isOnline === true;
   // 检测掉线状态：已登录但不在线
   const isOffline = qqLoginStatus && isOnline === false;
   const data = {
@@ -120,6 +129,8 @@ export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
     loginPhase,
     qrLoginAccepted: qqLoginStatus && (loginPhase === 'qrcode_scanned' || loginPhase === 'initializing'),
     coreReady: isLogin,
+    accountSwitching: WebUiDataRuntime.isQQAccountSwitching(),
+    canSwitchAccount: WebUiDataRuntime.canSwitchQQAccount(),
     sessionExpired: !!sessionExpiredReason,
     sessionExpiredReason,
     qrcodeurl: WebUiDataRuntime.getQQLoginQrcodeURL(),
@@ -177,6 +188,7 @@ export const getQQLoginInfoHandler: RequestHandler = async (_, res) => {
   const data = {
     ...basicInfo,
     online,
+    canSwitchAccount: WebUiDataRuntime.canSwitchQQAccount(),
     avatarUrl,
   };
   return sendSuccess(res, data);

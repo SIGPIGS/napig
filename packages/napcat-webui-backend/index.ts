@@ -108,6 +108,7 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
   }
   WebUiDataRuntime.setWebUiConfigQuickFunction(
     async () => {
+      if (WebUiDataRuntime.isQQAccountSwitching()) return;
       if (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') return;
       const autoLoginAccount = process.env['NAPCAT_QUICK_ACCOUNT'] || WebUiConfig.getAutoLoginAccount();
       const resolveQuickPasswordMd5 = (): string | undefined => {

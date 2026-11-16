@@ -47,6 +47,7 @@ import { runStartupStep } from './startup-step';
 import { createQuickLoginFlow } from './quick-login';
 import { getLoginDiagnostics } from '@/napcat-core/helper/login-diagnostics';
 import { connectionDiagnostics, startConnectionDiagnostics, summarizeLoginArguments } from '@/napcat-core/helper/connection-diagnostics';
+import { createAccountSwitch } from './account-switch';
 
 // NapCat Shell App ES 入口文件
 async function handleUncaughtExceptions (logger: LogWrapper) {
@@ -187,6 +188,7 @@ function prepareLogin (
   const advanceLogin = async () => {
     if (!startupReady || !loginServiceConnected) return;
     resolveConnection();
+    if (WebUiDataRuntime.isQQAccountSwitching() && WebUiDataRuntime.getOneBotContext()) return;
     if (context.isLogined || loginFlowRunning || WebUiDataRuntime.getQQLoginPhase() === 'waiting_phone_confirm') return;
     loginFlowRunning = true;
     try {
@@ -209,6 +211,32 @@ function prepareLogin (
     }
   };
 
+  const accountSwitch = createAccountSwitch({
+    onBegin: async () => {
+      context.cancelQuickLogin?.();
+      WebUiDataRuntime.setQQAccountSwitching(true);
+      WebUiDataRuntime.setQQLoginQrcodeURL('');
+      WebUiDataRuntime.setQQLoginError('');
+      WebUiDataRuntime.setQQLoginPhase('logging_out');
+      await WebUiDataRuntime.prepareQQAccountSwitch();
+    },
+    onRestarting: () => {
+      context.isLogined = false;
+      WebUiDataRuntime.setQQLoginStatus(false);
+      WebUiDataRuntime.getOneBotContext()?.core?.setOnline(false);
+      WebUiDataRuntime.setQQLoginPhase('reconnecting');
+    },
+    restart: () => WebUiDataRuntime.requestRestartProcess({ switchAccount: true }),
+    onError: message => {
+      WebUiDataRuntime.setQQLoginPhase('offline');
+      WebUiDataRuntime.setQQLoginError(message);
+    },
+  });
+  WebUiDataRuntime.setQQLogoutCallback(async () => {
+    if (!context.isLogined && !accountSwitch.isActive()) throw new Error('当前没有已登录的 QQ 账号');
+    await accountSwitch.start();
+  });
+
   const loginListener = new NodeIKernelLoginListener();
   // Keep unknown callback payloads out of logs: these can contain login credentials.
   for (const event of ['onLoginState', 'onLogoutFailed', 'onQRCodeSessionQuickLoginFailed', 'onPasswordLoginFailed', 'OnConfirmUnusualDeviceFailed', 'onQQLoginNumLimited'] as const) {
@@ -222,8 +250,11 @@ function prepareLogin (
     WebUiDataRuntime.setQQLoginError(tips);
   };
   loginListener.onQRCodeLoginSucceed = async (loginResult) => {
+    if (accountSwitch.isActive()) return;
     if (WebUiDataRuntime.getOneBotContext()?.core?.sessionExpiredReason || WebUiDataRuntime.getQQLoginPhase() === 'qrcode_failed') return;
     logger.log('[Core] [Login] 原生登录成功通知', diagnostics());
+    WebUiDataRuntime.setQQAccountSwitching(false);
+    process.env['NAPCAT_SWITCH_ACCOUNT'] = '0';
     WebUiDataRuntime.setQQSessionExpiredReason('');
     process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] = '0';
     context.cancelQuickLogin?.();
@@ -250,11 +281,13 @@ function prepareLogin (
     loginServiceConnected = false;
     context.isLogined = false;
     WebUiDataRuntime.setQQLoginStatus(false);
+    if (accountSwitch.isActive()) return;
     WebUiDataRuntime.setQQLoginPhase('offline');
     logger.logWarn('[Core] [Login] 登录服务已断开，将允许重新获取二维码');
   };
   loginListener.onLogoutSucceed = (...args: unknown[]) => {
     logger.logWarn('[Core] [Login] onLogoutSucceed', { ...diagnostics(), ...summarizeLoginArguments(args) });
+    if (accountSwitch.isActive()) return;
     context.cancelQuickLogin?.();
     context.isLogined = false;
     WebUiDataRuntime.setQQLoginStatus(false);
@@ -271,7 +304,7 @@ function prepareLogin (
     logger.log('[Core] [Login] onLoginConnecting', diagnostics());
   };
   loginListener.onQRCodeGetPicture = ({ pngBase64QrcodeData, qrcodeUrl }) => {
-    if (['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
+    if (accountSwitch.isActive() || ['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
     WebUiDataRuntime.setQQLoginQrcodeURL(qrcodeUrl);
     WebUiDataRuntime.setQQLoginError('');
     WebUiDataRuntime.setQQLoginPhase('waiting_qrcode');
@@ -302,13 +335,13 @@ function prepareLogin (
   };
 
   loginListener.onQRCodeSessionUserScaned = () => {
-    if (['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
+    if (accountSwitch.isActive() || ['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
     WebUiDataRuntime.setQQLoginPhase('qrcode_scanned');
     logger.log('[Core] [Login] 二维码已被扫描，等待确认...');
   };
 
   loginListener.onQRCodeSessionFailed = (errType: number, errCode: number) => {
-    if (!context.isLogined && !['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) {
+    if (!accountSwitch.isActive() && !context.isLogined && !['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) {
       logger.logError('[Core] [Login] Login Error,ErrType: ', errType, ' ErrCode:', errCode, diagnostics());
       if (errType === 1 && errCode === 5) {
         WebUiDataRuntime.setQQLoginStatus(false);
@@ -327,6 +360,7 @@ function prepareLogin (
   };
 
   loginListener.onLoginFailed = (...args) => {
+    if (accountSwitch.isActive()) return;
     context.cancelQuickLogin?.();
     const errInfo = JSON.stringify(args);
     logger.logError('[Core] [Login] Login Error', { ...diagnostics(), ...summarizeLoginArguments(args) });
@@ -658,7 +692,9 @@ async function handleLoginInner (context: LoginContext, logger: LogWrapper, logi
       }
     });
   });
-  if (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') {
+  if (WebUiDataRuntime.isQQAccountSwitching()) {
+    requestLoginQRCode(loginService, logger);
+  } else if (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') {
     requestLoginQRCode(loginService, logger);
   } else if (quickLoginUin) {
     const savedAccount = historyLoginList.find(u => u.uin === quickLoginUin);
@@ -1013,6 +1049,7 @@ export class NapCatShell {
         loginPhase: WebUiDataRuntime.getQQLoginPhase(),
       }),
       onOffline: (tips) => {
+        if (WebUiDataRuntime.isQQAccountSwitching()) return;
         if (this.core.sessionExpiredReason) WebUiDataRuntime.setQQSessionExpiredReason(this.core.sessionExpiredReason);
         WebUiDataRuntime.setQQLoginStatus(false);
         // 下线后的二维码已失效，绝不能继续交给页面展示或扫码。
@@ -1021,11 +1058,13 @@ export class NapCatShell {
         WebUiDataRuntime.setQQLoginPhase('reconnecting');
       },
       onRecovered: () => {
+        if (WebUiDataRuntime.isQQAccountSwitching()) return;
         WebUiDataRuntime.setQQLoginStatus(true);
         WebUiDataRuntime.setQQLoginError('');
         WebUiDataRuntime.setQQLoginPhase('ready');
       },
       restart: async (tips) => {
+        if (WebUiDataRuntime.isQQAccountSwitching()) return true;
         try {
           const restartResult = await WebUiDataRuntime.requestRestartProcess({ sessionExpiredReason: this.core.sessionExpiredReason });
           this.context.logger.logWarn('[Core] [Login] 账号已离线，正在重启 Worker 以重新创建 QQ 登录服务', restartResult);

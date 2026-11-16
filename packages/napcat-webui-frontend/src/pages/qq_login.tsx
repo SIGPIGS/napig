@@ -4,7 +4,7 @@ import { Image } from '@heroui/image';
 import { Tab, Tabs } from '@heroui/tabs';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import CryptoJS from 'crypto-js';
 import { signOut } from '@/utils/auth';
 import { MdSettings } from 'react-icons/md';
@@ -18,6 +18,7 @@ import { title } from '@/components/primitives';
 import PasswordLogin from '@/components/password_login';
 import QrCodeLogin from '@/components/qr_code_login';
 import QuickLogin from '@/components/quick_login';
+import SwitchQQAccount from '@/components/switch_qq_account';
 import { ThemeSwitch } from '@/components/theme-switch';
 import type { CaptchaCallbackData } from '@/components/tencent_captcha';
 
@@ -49,12 +50,16 @@ const parseLoginError = (errorStr: string) => {
 
 export default function QQLoginPage () {
   const navigate = useNavigate();
+  const location = useLocation();
+  const switchingFromDashboard = location.state?.accountSwitching === true;
   const dialog = useDialog();
   const [uinValue, setUinValue] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [qrcode, setQrcode] = useState<string>('');
-  const [loginPhase, setLoginPhase] = useState<string>('waiting_qrcode');
-  const [isRecoveringLoginService, setIsRecoveringLoginService] = useState(false);
+  const [accountSwitching, setAccountSwitching] = useState(switchingFromDashboard);
+  const [canSwitchAccount, setCanSwitchAccount] = useState(false);
+  const [loginPhase, setLoginPhase] = useState<string>(switchingFromDashboard ? 'reconnecting' : 'waiting_qrcode');
+  const [isRecoveringLoginService, setIsRecoveringLoginService] = useState(switchingFromDashboard);
   const qrcodeRef = useRef<string>('');
   const qrcodeRequestVersionRef = useRef(0);
   const isRefreshingQRCodeRef = useRef(false);
@@ -62,7 +67,12 @@ export default function QQLoginPage () {
   const lastErrorRef = useRef<string>('');
   const [qqList, setQQList] = useState<LoginListItem[]>([]);
   const [refresh, setRefresh] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>('shortcut');
+  const [activeTab, setActiveTab] = useState<string>(switchingFromDashboard ? 'qrcode' : 'shortcut');
+  const initialTabChosenRef = useRef(switchingFromDashboard);
+  const selectLoginTab = (tab: string) => {
+    initialTabChosenRef.current = true;
+    setActiveTab(tab);
+  };
   const firstLoad = useRef<boolean>(true);
   const [captchaState, setCaptchaState] = useState<{
     needCaptcha: boolean;
@@ -208,8 +218,17 @@ export default function QQLoginPage () {
     if (firstLoad.current) setIsLoading(true);
     try {
       const data = await QQManager.checkQQLoginStatusWithQrcode();
+      setAccountSwitching(!!data.accountSwitching);
+      setCanSwitchAccount(!!data.canSwitchAccount);
+      // Choose a default once. Persistent status flags and QR refreshes must
+      // never override the login method the user has selected.
+      if (!initialTabChosenRef.current) {
+        initialTabChosenRef.current = true;
+        if (data.accountSwitching || data.sessionExpired || data.loginPhase === 'qrcode_failed') {
+          setActiveTab('qrcode');
+        }
+      }
       setLoginPhase(data.loginPhase || (data.isLogin ? 'ready' : 'waiting_qrcode'));
-      if (data.sessionExpired || data.loginPhase === 'qrcode_failed') setActiveTab('qrcode');
       if (data.loginPhase === 'reconnecting') {
         setIsRecoveringLoginService(true);
       }
@@ -237,7 +256,7 @@ export default function QQLoginPage () {
           const isRecovering = data.loginPhase === 'reconnecting' || isRecoveringLoginService;
           const isQrCodeExpired = friendlyMsg.includes('二维码') && (friendlyMsg.includes('过期') || friendlyMsg.includes('失效'));
 
-          const isInlineFailure = data.sessionExpired || data.loginPhase === 'qrcode_failed';
+          const isInlineFailure = data.accountSwitching || data.sessionExpired || data.loginPhase === 'qrcode_failed';
           if (!isRecovering && !isInlineFailure && (!isQrCodeExpired || activeTab === 'qrcode')) {
             dialog.alert({
               title: '登录失败',
@@ -344,8 +363,10 @@ export default function QQLoginPage () {
   }, [isRefreshingQRCode, loginPhase, isRecoveringLoginService]);
 
   useEffect(() => {
-    onUpdateQQList();
-  }, []);
+    // The old Worker may already be gone when we arrive from the logout action.
+    // Fetch saved accounts after the replacement login service is available.
+    if (!isRecoveringLoginService) onUpdateQQList();
+  }, [isRecoveringLoginService]);
 
   useEffect(() => {
     if (!isRecoveringLoginService) return;
@@ -391,6 +412,15 @@ export default function QQLoginPage () {
             </CardHeader>
 
             <CardBody className='flex gap-5 p-10 pt-0'>
+              {accountSwitching && loginPhase === 'logging_out' && (
+                <div role='status' className='text-center'>正在退出 QQ…</div>
+              )}
+              {accountSwitching && loginPhase === 'offline' && (
+                <div role='status' className='text-center space-y-3'>
+                  <div>{loginError || 'QQ 账号切换未完成，请重试'}</div>
+                  {canSwitchAccount && <SwitchQQAccount retry />}
+                </div>
+              )}
               {loginPhase === 'waiting_phone_confirm' && (
                 <div role='status' className='rounded-lg bg-primary-50 px-4 py-4 text-center space-y-3'>
                   <div className='font-medium'>请在手机 QQ 上确认登录</div>
@@ -399,7 +429,7 @@ export default function QQLoginPage () {
                   </div>
                   <Button
                     size='sm' variant='flat' isLoading={isRefreshingQRCode} onPress={() => {
-                      setActiveTab('qrcode');
+                      selectLoginTab('qrcode');
                       onRefreshQRCode();
                     }}
                   >
@@ -412,10 +442,10 @@ export default function QQLoginPage () {
                 classNames={{
                   tabList: 'shadow-sm dark:shadow-none',
                 }}
-                isDisabled={isLoading}
+                isDisabled={isLoading || (accountSwitching && ['logging_out', 'offline'].includes(loginPhase))}
                 size='lg'
                 selectedKey={activeTab}
-                onSelectionChange={(key) => key !== null && setActiveTab(key.toString())}
+                onSelectionChange={(key) => key !== null && selectLoginTab(key.toString())}
               >
                 <Tab key='shortcut' title='快速登录'>
                   <QuickLogin

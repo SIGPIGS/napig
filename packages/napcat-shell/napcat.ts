@@ -43,9 +43,10 @@ const ENV = {
 
 // Worker 消息类型
 interface WorkerMessage {
-  type: 'restart' | 'restart-prepare' | 'shutdown' | 'login-success';
+  type: 'restart' | 'restart-prepare' | 'shutdown' | 'login-success' | 'account-switch-prepare' | 'account-switch-ready';
   port?: number;
   sessionExpiredReason?: string;
+  switchAccount?: boolean;
 }
 
 const logger = new LogWrapper(pathWrapper.logsPath);
@@ -56,8 +57,10 @@ if (!ENV.isWorkerProcess && !ENV.isMultiProcessDisabled) {
 // 进程管理器和当前 Worker 进程引用
 let processManager: IProcessManager | null = null;
 let currentWorker: IWorkerProcess | null = null;
+let switchingWorker: IWorkerProcess | undefined;
 let isElectron = false;
 let isRestarting = false;
+let switchAccount = process.env['NAPCAT_SWITCH_ACCOUNT'] === '1';
 let sessionExpiredReason = process.env['NAPCAT_SESSION_EXPIRED_REASON'] || '';
 let allowRecoveryQuickLogin = false;
 const requestAutomaticRecovery = createSessionRecoveryBudget();
@@ -119,13 +122,14 @@ function forceKillProcess (pid: number): void {
 /**
  * 重启 Worker 进程
  */
-export async function restartWorker (port?: number, expiredReason?: string): Promise<void> {
+export async function restartWorker (port?: number, expiredReason?: string, requestedSwitch = false): Promise<void> {
   logger.logWarn('[NapCat] [Process] Worker重启请求', {
     ...getLoginDiagnostics(),
     workerPid: currentWorker?.pid,
     alreadyRestarting: isRestarting,
     sessionExpired: !!expiredReason,
   });
+  if (requestedSwitch) switchAccount = true;
   if (expiredReason && !sessionExpiredReason) {
     sessionExpiredReason = expiredReason;
     allowRecoveryQuickLogin = requestAutomaticRecovery();
@@ -200,11 +204,11 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
 
   // An expiry recovery may reuse the configured account once. Consume this
   // permission at spawn so a Worker crash cannot repeat the same attempt.
-  const recoveryQuickLogin = !!sessionExpiredReason && allowRecoveryQuickLogin;
+  const recoveryQuickLogin = !switchAccount && !!sessionExpiredReason && allowRecoveryQuickLogin;
   if (sessionExpiredReason) logger.logWarn('[NapCat] [Process] 身份失效恢复', { automaticQuickLogin: recoveryQuickLogin });
   // 常规启动和获准的身份恢复传递 -q 或 --qq 参数。
   const workerArgs: string[] = [];
-  if ((passQuickLogin && !sessionExpiredReason) || recoveryQuickLogin) {
+  if (!switchAccount && ((passQuickLogin && !sessionExpiredReason) || recoveryQuickLogin)) {
     const args = process.argv.slice(2);
     const qIndex = args.findIndex(arg => arg === '-q' || arg === '--qq');
     if (qIndex !== -1 && qIndex + 1 < args.length) {
@@ -220,6 +224,7 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
     env: {
       ...process.env,
       NAPCAT_WORKER_PROCESS: '1',
+      NAPCAT_SWITCH_ACCOUNT: switchAccount ? '1' : '0',
       NAPCAT_SESSION_EXPIRED_REASON: sessionExpiredReason,
       NAPCAT_RECOVERY_QUICK_LOGIN: recoveryQuickLogin ? '1' : '0',
       ...(preferredPort ? { NAPCAT_WEBUI_PREFERRED_PORT: String(preferredPort) } : {}),
@@ -252,12 +257,19 @@ async function startWorker (passQuickLogin: boolean = true, preferredPort?: numb
     // 处理重启请求
     if (typeof msg === 'object' && msg !== null && 'type' in msg) {
       const message = msg as WorkerMessage;
-      if (message.type === 'restart') {
-        restartWorker(message.port, message.sessionExpiredReason).catch(e => {
+      if (message.type === 'account-switch-prepare') {
+        switchAccount = true;
+        switchingWorker = child;
+        child.postMessage({ type: 'account-switch-ready' });
+      } else if (message.type === 'restart') {
+        restartWorker(message.port, message.sessionExpiredReason, message.switchAccount).catch(e => {
           logger.logError(`[NapCat] [${processType}] 重启Worker进程失败:`, e);
         });
       } else if (message.type === 'login-success') {
+        if (child === switchingWorker) return;
+        switchingWorker = undefined;
         sessionExpiredReason = '';
+        switchAccount = false;
         logger.log(`[NapCat] [${processType}] Worker进程已登录成功，切换到正常重试策略`, {
           ...getLoginDiagnostics(),
           workerPid,
@@ -388,15 +400,39 @@ async function startWorkerProcess (): Promise<void> {
     }
   }
 
+  let confirmAccountSwitch: (() => void) | undefined;
+
   // 监听来自父进程的消息
   processManager.onParentMessage((msg: unknown) => {
     if (typeof msg === 'object' && msg !== null && 'type' in msg) {
+      if (msg.type === 'account-switch-ready') confirmAccountSwitch?.();
       if (msg.type === 'restart-prepare' || msg.type === 'shutdown') {
         setTimeout(() => {
           process.exit(0);
         }, 100);
       }
     }
+  });
+
+  WebUiDataRuntime.setPrepareQQAccountSwitch(async () => {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        confirmAccountSwitch = undefined;
+        reject(new Error('主进程未确认账号切换，请重试'));
+      }, 3000);
+      confirmAccountSwitch = () => {
+        clearTimeout(timer);
+        confirmAccountSwitch = undefined;
+        resolve();
+      };
+      try {
+        if (!processManager!.sendToParent({ type: 'account-switch-prepare' })) throw new Error('无法与主进程通信');
+      } catch (error) {
+        clearTimeout(timer);
+        confirmAccountSwitch = undefined;
+        reject(error);
+      }
+    });
   });
 
   // 注册重启进程函数到 WebUI
@@ -406,6 +442,7 @@ async function startWorkerProcess (): Promise<void> {
         type: 'restart',
         port: webUiRuntimePort,
         sessionExpiredReason: options?.sessionExpiredReason,
+        switchAccount: options?.switchAccount,
       });
 
       if (success) {

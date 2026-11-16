@@ -31,9 +31,11 @@ export enum NapCatCoreWorkingEnv {
 
 export interface RestartProcessOptions {
   sessionExpiredReason?: string;
+  switchAccount?: boolean;
 }
 
 export type QQLoginPhase =
+  | 'logging_out'
   | 'waiting_phone_confirm'
   | 'waiting_qrcode'
   | 'generating_qrcode'

@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import {
   QQCheckLoginStatusHandler,
+  QQLogoutHandler,
   QQGetQRcodeHandler,
   QQGetQuickLoginListHandler,
   QQSetQuickLoginHandler,
@@ -41,6 +42,7 @@ import {
 } from '@/napcat-webui-backend/src/api/QQLogin';
 
 const router: Router = Router();
+router.post('/Logout', QQLogoutHandler);
 // router:获取快速登录列表
 router.all('/GetQuickLoginList', QQGetQuickLoginListHandler);
 // router:获取快速登录列表（新）

@@ -13,7 +13,7 @@ interface QrCodeLoginProps {
 }
 
 const QrCodeLogin: React.FC<QrCodeLoginProps> = ({ qrcode, loginError, onRefresh, isRefreshing = false, loginPhase, isRecoveringLoginService = false }) => {
-  if (loginPhase === 'waiting_phone_confirm') return null;
+  if (loginPhase === 'waiting_phone_confirm' || loginPhase === 'logging_out') return null;
   const transitionMessage = loginPhase === 'qrcode_scanned'
     ? '二维码已扫描，等待手机确认…'
     : loginPhase === 'initializing'

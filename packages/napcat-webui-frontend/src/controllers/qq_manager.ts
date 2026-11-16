@@ -4,6 +4,10 @@ import { serverRequest } from '@/utils/request';
 import { SelfInfo } from '@/types/user';
 
 export default class QQManager {
+  public static async logout () {
+    await serverRequest.post('/QQLogin/Logout', {}, { timeout: 25_000 });
+  }
+
   public static async getOB11Config () {
     const data = await serverRequest.post<ServerResponse<OneBotConfig>>(
       '/OB11Config/GetConfig'
@@ -23,6 +27,8 @@ export default class QQManager {
       ServerResponse<{
         isLogin: boolean;
         isOffline?: boolean;
+        accountSwitching?: boolean;
+        canSwitchAccount?: boolean;
         sessionExpired?: boolean;
         sessionExpiredReason?: string;
         qrcodeurl: string;
@@ -38,10 +44,12 @@ export default class QQManager {
         qrcodeurl: string;
         isLogin: boolean;
         isOffline?: boolean;
+        accountSwitching?: boolean;
+        canSwitchAccount?: boolean;
         sessionExpired?: boolean;
         sessionExpiredReason?: string;
         loginError?: string;
-        loginPhase?: 'waiting_phone_confirm' | 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'qrcode_failed' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
+        loginPhase?: 'logging_out' | 'waiting_phone_confirm' | 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'qrcode_failed' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
         qrLoginAccepted?: boolean;
         coreReady?: boolean;
       }>

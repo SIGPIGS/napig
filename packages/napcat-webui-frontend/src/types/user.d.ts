@@ -318,6 +318,7 @@ export interface User {
 
 // 自身信息
 export interface SelfInfo extends User {
+  canSwitchAccount?: boolean;
   online?: boolean
 }
 

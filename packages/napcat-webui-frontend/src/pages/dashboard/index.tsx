@@ -10,6 +10,7 @@ import toast from 'react-hot-toast';
 import NetworkItemDisplay from '@/components/display_network_item';
 import Hitokoto from '@/components/hitokoto';
 import QQInfoCard from '@/components/qq_info_card';
+import SwitchQQAccount from '@/components/switch_qq_account';
 import SystemInfo from '@/components/system_info';
 import SystemStatusDisplay from '@/components/system_status_display';
 
@@ -58,7 +59,12 @@ const Networks: React.FC = () => {
 
 const QQInfo: React.FC = () => {
   const { data, loading, error } = useRequest(QQManager.getQQLoginInfo);
-  return <QQInfoCard data={data} error={error} loading={loading} />;
+  return (
+    <>
+      <QQInfoCard data={data} error={error} loading={loading} />
+      {data?.canSwitchAccount && <SwitchQQAccount />}
+    </>
+  );
 };
 
 export interface SystemStatusCardProps {

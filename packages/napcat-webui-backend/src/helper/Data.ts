@@ -1,6 +1,11 @@
 import { napCatVersion } from 'napcat-common/src/version';
 import { NapCatCoreWorkingEnv, type LoginRuntimeType, type QQLoginPhase, type RestartProcessOptions } from '../types';
 
+let restartSupported = false;
+let accountSwitching = process.env['NAPCAT_SWITCH_ACCOUNT'] === '1';
+let prepareAccountSwitch: (() => Promise<void>) | undefined;
+let logoutCallback: (() => Promise<void>) | undefined;
+
 let sessionExpiredReason = process.env['NAPCAT_SESSION_EXPIRED_REASON'] || '';
 
 const LoginRuntime: LoginRuntimeType = {
@@ -58,6 +63,36 @@ function beginExplicitLogin () {
 }
 
 export const WebUiDataRuntime = {
+  isQQAccountSwitching (): boolean {
+    return accountSwitching;
+  },
+
+  setQQAccountSwitching (value: boolean): void {
+    accountSwitching = value;
+  },
+
+  canSwitchQQAccount (): boolean {
+    return restartSupported && !!prepareAccountSwitch && !!logoutCallback;
+  },
+
+  setPrepareQQAccountSwitch (callback: () => Promise<void>): void {
+    prepareAccountSwitch = callback;
+  },
+
+  async prepareQQAccountSwitch (): Promise<void> {
+    if (!prepareAccountSwitch) throw new Error('切换 QQ 账号需要 Shell 多进程模式');
+    await prepareAccountSwitch();
+  },
+
+  setQQLogoutCallback (callback: () => Promise<void>): void {
+    logoutCallback = callback;
+  },
+
+  async requestQQLogout (): Promise<void> {
+    if (!restartSupported || !prepareAccountSwitch || !logoutCallback) throw new Error('切换 QQ 账号需要 Shell 多进程模式');
+    await logoutCallback();
+  },
+
   getQQSessionExpiredReason (): string {
     return sessionExpiredReason;
   },
@@ -138,6 +173,7 @@ export const WebUiDataRuntime = {
   },
 
   requestQuickLogin: function (uin) {
+    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
     beginExplicitLogin();
     return LoginRuntime.NapCatHelper.onQuickLoginRequested(uin);
   } as LoginRuntimeType['NapCatHelper']['onQuickLoginRequested'],
@@ -147,6 +183,7 @@ export const WebUiDataRuntime = {
   },
 
   requestPasswordLogin: function (uin: string, passwordMd5: string) {
+    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
     beginExplicitLogin();
     return LoginRuntime.NapCatHelper.onPasswordLoginRequested(uin, passwordMd5);
   } as LoginRuntimeType['NapCatHelper']['onPasswordLoginRequested'],
@@ -156,6 +193,7 @@ export const WebUiDataRuntime = {
   },
 
   requestCaptchaLogin: function (uin: string, passwordMd5: string, ticket: string, randstr: string, sid: string) {
+    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
     return LoginRuntime.NapCatHelper.onCaptchaLoginRequested(uin, passwordMd5, ticket, randstr, sid);
   } as LoginRuntimeType['NapCatHelper']['onCaptchaLoginRequested'],
 
@@ -164,6 +202,7 @@ export const WebUiDataRuntime = {
   },
 
   requestNewDeviceLogin: function (uin: string, passwordMd5: string, newDevicePullQrCodeSig: string) {
+    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
     return LoginRuntime.NapCatHelper.onNewDeviceLoginRequested(uin, passwordMd5, newDevicePullQrCodeSig);
   } as LoginRuntimeType['NapCatHelper']['onNewDeviceLoginRequested'],
 
@@ -211,6 +250,7 @@ export const WebUiDataRuntime = {
   },
 
   setRestartProcessCall (func: (options?: RestartProcessOptions) => Promise<{ result: boolean; message: string; }>): void {
+    restartSupported = true;
     LoginRuntime.NapCatHelper.onRestartProcessRequested = func;
   },
 
@@ -235,6 +275,7 @@ export const WebUiDataRuntime = {
   },
 
   refreshQRCode: async function () {
+    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待登录服务恢复');
     const previousQRCodeUrl = LoginRuntime.QQQRCodeURL;
     const previousPhase = LoginRuntime.QQLoginPhase;
     LoginRuntime.QQLoginError = '';
