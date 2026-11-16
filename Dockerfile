@@ -43,9 +43,19 @@ WORKDIR /app
 
 COPY NapCat.Shell.zip entrypoint.sh /app/
 
+# QQ's official download page signs release URLs before downloading them.
+# Resolve a fresh signature at build time rather than storing an expiring URL.
 RUN arch=$(arch | sed s/aarch64/arm64/ | sed s/x86_64/amd64/) && \
-    curl --retry 3 --connect-timeout 30 --max-time 600 -fL -o linuxqq.deb \
-        "https://qqdl.gtimg.cn/qqfile/QQNT/9.9.36/beta/9ee04bef/linuxqq_3.2.34-53644_${arch}.deb" && \
+    qq_url="https://qqdl.gtimg.cn/qqfile/QQNTV2/9.9.37/release/816b3c79/QQ_3.2.35_261103_${arch}_01.deb" && \
+    signed_url=$(curl --retry 3 --connect-timeout 30 --max-time 60 -fsS \
+        -H 'Content-Type: application/json' \
+        -H 'x-oidb: {"uint32_command":"0x9b8e","uint32_service_type":1}' \
+        --data "$(jq -nc --arg url "$qq_url" '{url: $url}')" \
+        https://im.qq.com/http2rpc/gotrpc/noauth/trpc.qqntv2.urlsign.UrlSign/GetSign | \
+        jq -er 'select(.retcode == 0) | .data.url | select(type == "string" and startswith("https://"))') && \
+    curl --retry 3 --connect-timeout 30 --max-time 600 -fL -o linuxqq.deb "$signed_url" && \
+    test "$(dpkg-deb -f linuxqq.deb Version)" = '3.2.35-54395' && \
+    test "$(dpkg-deb -f linuxqq.deb Architecture)" = "$arch" && \
     dpkg -i --force-depends linuxqq.deb && rm linuxqq.deb
 
 RUN chmod +x entrypoint.sh && \
