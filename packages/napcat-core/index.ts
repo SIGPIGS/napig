@@ -1,5 +1,6 @@
 import { QQSessionValidity } from './helper/session-validity';
 import { getLoginDiagnostics } from './helper/login-diagnostics';
+import { dumpConnectionDiagnostics } from './helper/connection-diagnostics';
 import {
   NTQQFileApi,
   NTQQFriendApi,
@@ -156,6 +157,7 @@ export class NapCatCore {
 
   expireSession (reason: string, source?: { operation: string; result: number; }): void {
     if (!this.sessionValidity.expire(reason)) return;
+    dumpConnectionDiagnostics(this.context.logger, 'SessionExpired');
     this.context.logger.logError('[Core] [SessionExpired] diagnostics', {
       ...getLoginDiagnostics(() => this.context.session.getMSFService().getMsfStatus()),
       wasOnline: this.selfInfo.online,
@@ -288,6 +290,7 @@ export class NapCatCore {
     };
 
     msgListener.onKickedOffLine = (Info: KickedOffLineInfo) => {
+      dumpConnectionDiagnostics(this.context.logger, 'KickedOffLine');
       // 下线通知
       const tips = `[KickedOffLine] [${Info.tipsTitle}] ${Info.tipsDesc}`;
       this.context.logger.logError(tips, {
@@ -341,6 +344,7 @@ export class NapCatCore {
         this.selfInfo.online = false;
         this.context.logger.log('账号状态变更为离线');
         if (wasOnline) {
+          dumpConnectionDiagnostics(this.context.logger, 'SelfOffline');
           this.event.emit('SelfOffline', '[SelfOffline] 账号状态变更为离线（未收到 KickedOffLine 通知）');
         }
       } else {

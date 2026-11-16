@@ -2,7 +2,7 @@ import { RequestHandler } from 'express';
 import https from 'https';
 
 import { WebUiDataRuntime } from '@/napcat-webui-backend/src/helper/Data';
-import { WebUiConfig } from '@/napcat-webui-backend/index';
+import { WebUiConfig, webUiLogger } from '@/napcat-webui-backend/index';
 import { isEmpty } from '@/napcat-webui-backend/src/utils/check';
 import { sendError, sendSuccess } from '@/napcat-webui-backend/src/utils/response';
 import {
@@ -18,6 +18,11 @@ import {
   getMacPrimaryMac,
 } from '@/napcat-webui-backend/src/utils/guid';
 import os from 'node:os';
+import { getLoginDiagnostics } from '@/napcat-core/helper/login-diagnostics';
+
+function logLoginControl (action: string) {
+  webUiLogger?.logWarn('[Core] [LoginControl]', { action, source: 'webui', ...getLoginDiagnostics(), loginPhase: WebUiDataRuntime.getQQLoginPhase() });
+}
 
 // oidb 新设备验证请求辅助函数
 function oidbRequest (uid: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -125,6 +130,7 @@ export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
 
 // 快速登录
 export const QQSetQuickLoginHandler: RequestHandler = async (req, res) => {
+  logLoginControl('quick-login');
   // 获取QQ号
   const { uin } = req.body;
   // 判断是否已经登录
@@ -191,6 +197,7 @@ export const setAutoLoginAccountHandler: RequestHandler = async (req, res) => {
 
 // 刷新QQ登录二维码
 export const QQRefreshQRcodeHandler: RequestHandler = async (_, res) => {
+  logLoginControl('refresh-qrcode');
   // 与 CheckLoginStatus 保持一致：运行时登录标记可能在账号下线后
   // 尚未同步，但 core.selfInfo.online 已能反映实际在线状态。
   const oneBotContext = WebUiDataRuntime.getOneBotContext();
@@ -214,6 +221,7 @@ export const QQRefreshQRcodeHandler: RequestHandler = async (_, res) => {
 
 // 密码登录
 export const QQPasswordLoginHandler: RequestHandler = async (req, res) => {
+  logLoginControl('password-login');
   // 获取QQ号和密码MD5
   const { uin, passwordMd5 } = req.body;
   // 判断是否已经登录
@@ -381,6 +389,7 @@ export const QQCreateGUIDBackupHandler: RequestHandler = async (_, res) => {
 
 // 重启NapCat
 export const QQRestartNapCatHandler: RequestHandler = async (_, res) => {
+  logLoginControl('restart');
   try {
     const result = await WebUiDataRuntime.requestRestartProcess();
     if (result.result) {

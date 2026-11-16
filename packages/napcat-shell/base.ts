@@ -46,6 +46,7 @@ import { connectToNamedPipe } from './pipe';
 import { runStartupStep } from './startup-step';
 import { createQuickLoginFlow } from './quick-login';
 import { getLoginDiagnostics } from '@/napcat-core/helper/login-diagnostics';
+import { connectionDiagnostics, startConnectionDiagnostics, summarizeLoginArguments } from '@/napcat-core/helper/connection-diagnostics';
 
 // NapCat Shell App ES 入口文件
 async function handleUncaughtExceptions (logger: LogWrapper) {
@@ -209,6 +210,12 @@ function prepareLogin (
   };
 
   const loginListener = new NodeIKernelLoginListener();
+  // Keep unknown callback payloads out of logs: these can contain login credentials.
+  for (const event of ['onLoginState', 'onLogoutFailed', 'onQRCodeSessionQuickLoginFailed', 'onPasswordLoginFailed', 'OnConfirmUnusualDeviceFailed', 'onQQLoginNumLimited'] as const) {
+    loginListener[event] = (...args: unknown[]) => {
+      logger.logWarn('[Core] [NativeLoginEvent]', { event, ...diagnostics(), ...summarizeLoginArguments(args) });
+    };
+  }
   loginListener.onUserLoggedIn = (userid: string) => {
     const tips = `当前账号(${userid})已登录,无法重复登录`;
     logger.logError(tips);
@@ -237,8 +244,8 @@ function prepareLogin (
       online: true,
     });
   };
-  loginListener.onLoginDisConnected = () => {
-    logger.logWarn('[Core] [Login] onLoginDisConnected', diagnostics());
+  loginListener.onLoginDisConnected = (...args: unknown[]) => {
+    logger.logWarn('[Core] [Login] onLoginDisConnected', { ...diagnostics(), ...summarizeLoginArguments(args) });
     context.cancelQuickLogin?.();
     loginServiceConnected = false;
     context.isLogined = false;
@@ -246,8 +253,8 @@ function prepareLogin (
     WebUiDataRuntime.setQQLoginPhase('offline');
     logger.logWarn('[Core] [Login] 登录服务已断开，将允许重新获取二维码');
   };
-  loginListener.onLogoutSucceed = () => {
-    logger.logWarn('[Core] [Login] onLogoutSucceed', diagnostics());
+  loginListener.onLogoutSucceed = (...args: unknown[]) => {
+    logger.logWarn('[Core] [Login] onLogoutSucceed', { ...diagnostics(), ...summarizeLoginArguments(args) });
     context.cancelQuickLogin?.();
     context.isLogined = false;
     WebUiDataRuntime.setQQLoginStatus(false);
@@ -322,12 +329,13 @@ function prepareLogin (
   loginListener.onLoginFailed = (...args) => {
     context.cancelQuickLogin?.();
     const errInfo = JSON.stringify(args);
-    logger.logError('[Core] [Login] Login Error , ErrInfo: ', errInfo);
+    logger.logError('[Core] [Login] Login Error', { ...diagnostics(), ...summarizeLoginArguments(args) });
     WebUiDataRuntime.setQQLoginError(`登录失败: ${errInfo}`);
   };
 
   // Register refresh alongside the listener, including during early startup.
   WebUiDataRuntime.setRefreshQRCodeCallback(async () => {
+    logger.logWarn('[Core] [LoginControl]', { action: 'refresh-qrcode', ...diagnostics() });
     if (!startupReady || !loginServiceConnected || !context.loginFlowInitialized) {
       throw new Error('QQ 登录服务尚未就绪，请稍后重试');
     }
@@ -428,6 +436,7 @@ async function handleLoginInner (context: LoginContext, logger: LogWrapper, logi
     }
   };
   WebUiDataRuntime.setQuickLoginCall(async (uin: string) => {
+    logger.logWarn('[Core] [LoginControl]', { action: 'quick-login', ...getLoginDiagnostics(() => loginService.getMsfStatus()), loginPhase: WebUiDataRuntime.getQQLoginPhase() });
     if (!uin) return { result: false, message: '快速登录账号为空' };
     logger.log('正在快速登录 ', uin);
     const outcome = await quickLogin.start(uin);
@@ -441,6 +450,7 @@ async function handleLoginInner (context: LoginContext, logger: LogWrapper, logi
 
   // 注册密码登录回调
   WebUiDataRuntime.setPasswordLoginCall(async (uin: string, passwordMd5: string) => {
+    logger.logWarn('[Core] [LoginControl]', { action: 'password-login', ...getLoginDiagnostics(() => loginService.getMsfStatus()), loginPhase: WebUiDataRuntime.getQQLoginPhase() });
     context.cancelQuickLogin?.();
     return await new Promise((resolve) => {
       if (uin && passwordMd5) {
@@ -810,6 +820,9 @@ export async function NCoreInitShell () {
   // wrapper.node 加载后再初始化 hook，按 schema 读取配置
   const napcatConfig = loadNapcatConfig(pathWrapper.configPath);
   await nativePacketHandler.init(basicInfoWrapper.getFullQQVersion(), napcatConfig.o3HookMode === 1);
+  nativePacketHandler.onAll(({ type, cmd, seq, hex_data }) => {
+    connectionDiagnostics.recordPacket({ type, cmd, seq, bytes: Math.floor(hex_data.length / 2) });
+  });
 
   // 登录前监听 OidbSvcTrpcTcp.0xcde_2 数据包，获取数据库 passphrase
   let dbPassphrase: string | undefined;
@@ -849,6 +862,7 @@ export async function NCoreInitShell () {
   InitWebUi(logger, pathWrapper, logSubscription, statusHelperSubscription).then().catch(e => logger.logError(e));
   const engine = wrapper.NodeIQQNTWrapperEngine.get();
   const loginService = wrapper.NodeIKernelLoginService.get();
+  startConnectionDiagnostics(logger, () => loginService.getMsfStatus(), () => WebUiDataRuntime.getQQLoginPhase());
   const login = prepareLogin(loginService, logger, pathWrapper);
   let session: NodeIQQNTWrapperSession;
   let startupSession: NodeIQQNTStartupSessionWrapper | null = null;

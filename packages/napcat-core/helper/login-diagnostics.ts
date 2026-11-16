@@ -1,3 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
+/** One ID per Worker lifetime, shared by login, packet and recovery diagnostics. */
+export const loginDiagnosticId = randomUUID();
+
 /** Small, explicit snapshot: never serialize native sessions, env or login responses. */
 export function getLoginDiagnostics (readMsfStatus?: () => number) {
   let msfStatus: number | null = null;
@@ -10,6 +15,7 @@ export function getLoginDiagnostics (readMsfStatus?: () => number) {
   }
   return {
     timestamp: new Date().toISOString(),
+    diagnosticId: loginDiagnosticId,
     pid: process.pid,
     ppid: process.ppid,
     uptimeMs: Math.round(process.uptime() * 1000),
