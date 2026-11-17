@@ -1,15 +1,3 @@
-import type { OneBotConfig } from '@/napcat-webui-backend/src/onebot/config';
-export interface LoginListItem {
-  uin: string;
-  uid: string;
-  nickName: string;
-  faceUrl: string;
-  facePath: string;
-  loginType: 1; // 1是二维码登录？
-  isQuickLogin: boolean; // 是否可以快速登录
-  isAutoLogin: boolean; // 是否可以自动登录
-}
-
 interface SelfInfo {
   uid: string;
   uin: string;
@@ -31,11 +19,13 @@ export enum NapCatCoreWorkingEnv {
 
 export interface RestartProcessOptions {
   sessionExpiredReason?: string;
-  switchAccount?: boolean;
+  loginMethod?: 'auto' | 'qr';
 }
 
 export type QQLoginPhase =
-  | 'logging_out'
+  | 'logging_in'
+  | 'captcha_required'
+  | 'device_verification'
   | 'waiting_phone_confirm'
   | 'waiting_qrcode'
   | 'generating_qrcode'
@@ -58,17 +48,9 @@ export interface LoginRuntimeType {
   QQDataPath: string;
   onQQLoginStatusChange: (status: boolean) => Promise<void>;
   onRefreshQRCode: () => Promise<void>;
-  WebUiConfigQuickFunction: () => Promise<void>;
   OneBotContext: any | null; // OneBot 上下文，用于调试功能
   NapCatHelper: {
-    onQuickLoginRequested: (uin: string) => Promise<{ result: boolean; message: string; needPhoneConfirm?: boolean; }>;
-    onPasswordLoginRequested: (uin: string, passwordMd5: string) => Promise<{ result: boolean; message: string; needCaptcha?: boolean; proofWaterUrl?: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;
-    onCaptchaLoginRequested: (uin: string, passwordMd5: string, ticket: string, randstr: string, sid: string) => Promise<{ result: boolean; message: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;
-    onNewDeviceLoginRequested: (uin: string, passwordMd5: string, newDevicePullQrCodeSig: string) => Promise<{ result: boolean; message: string; needNewDevice?: boolean; jumpUrl?: string; newDevicePullQrCodeSig?: string; }>;
-    onOB11ConfigChanged: (ob11: OneBotConfig) => Promise<void>;
     onRestartProcessRequested: (options?: RestartProcessOptions) => Promise<{ result: boolean; message: string; }>;
-    QQLoginList: string[];
-    NewQQLoginList: LoginListItem[];
   };
   NapCatVersion: string;
 }

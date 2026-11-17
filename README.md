@@ -82,11 +82,25 @@ _Modern protocol-side framework implemented based on NTQQ._
 
 **本仓库仅用于提高易用性，实现消息推送类功能，此外，禁止任何项目未经仓库主作者授权基于 NapCat 代码开发。使用请遵守当地法律法规，由此造成的问题由使用者和提供违规使用教程者负责。**
 
+## Napig 配置
+
+将 [napig.example.yaml](./napig.example.yaml) 复制为进程工作目录下的 `napig.yaml`，或用
+`NAPIG_CONFIG=/path/to/napig.yaml` 指定路径。启动时读取一次，修改后重启生效。
+账号 ID、AppID 和 OpenID 使用字符串；一个实例只维护 `account.id` 指定的单个账号。
+
+WebUI 服务配置和 OneBot 配置只从 YAML 读取，不再叠加旧 JSON 或账号环境变量。WebUI 中这些设置
+仅可查看；主题和字体仍可修改。未知字段递归忽略并在日志中提示字段路径，已知字段错误或缺失必填字段会阻止启动。
+core、QQ 数据目录、票据与设备缓存保持原机制；machine-id 继续由部署管理，不属于 YAML。
+
+`qqbot` 可省略。启用时使用官方 QQ 机器人 AppID、AppSecret 和 `admins`；管理员既能控制登录，
+也接收掉线通知。私聊机器人 `/whoami` 可取得当前应用下的 C2C OpenID，它不能用 QQ 号代替。
+`/status` 查看状态，`/login` 尝试恢复登录，`/login qr` 请求扫码；验证码和新设备验证在 WebUI 完成。
+
 ## WebUI 外部认证
 
 Napig WebUI 由反向代理统一认证，不再提供共享 token、Passkey 或双因素登录。启用 WebUI 时必须设置
-`NAPCAT_WEBUI_PUBLIC_URL` 为公开访问 origin，例如 `https://napcat.example.com`，不包含路径。
-缺少该配置时 WebUI 不启动；QQ 登录和 OneBot 服务不依赖 WebUI 认证。
+`webui.public-url` 为公开访问 origin，例如 `https://napcat.example.com`，不包含路径。
+WebUI 启用时缺少该配置会阻止启动；不需要 WebUI 时设置 `webui.enabled: false`。
 
 代理必须先验证用户，再覆盖 `X-Auth-Request-User` 请求头。所有 WebUI 页面、API、日志流和 WebSocket
 均要求该身份头；写请求和 WebSocket 握手的 `Origin` 必须与公开 origin 一致。认证头本身不是签名凭证，

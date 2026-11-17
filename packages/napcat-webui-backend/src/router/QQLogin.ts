@@ -2,16 +2,10 @@ import { Router } from 'express';
 
 import {
   QQCheckLoginStatusHandler,
-  QQLogoutHandler,
+  QQLoginHandler,
   QQGetQRcodeHandler,
-  QQGetQuickLoginListHandler,
-  QQSetQuickLoginHandler,
-  QQGetLoginListNewHandler,
   getQQLoginInfoHandler,
-  getAutoLoginAccountHandler,
-  setAutoLoginAccountHandler,
   QQRefreshQRcodeHandler,
-  QQPasswordLoginHandler,
   QQCaptchaLoginHandler,
   QQNewDeviceLoginHandler,
   QQGetNewDeviceQRCodeHandler,
@@ -42,27 +36,15 @@ import {
 } from '@/napcat-webui-backend/src/api/QQLogin';
 
 const router: Router = Router();
-router.post('/Logout', QQLogoutHandler);
-// router:获取快速登录列表
-router.all('/GetQuickLoginList', QQGetQuickLoginListHandler);
-// router:获取快速登录列表（新）
-router.all('/GetQuickLoginListNew', QQGetLoginListNewHandler);
+router.post('/Login', QQLoginHandler);
 // router:检查QQ登录状态
 router.post('/CheckLoginStatus', QQCheckLoginStatusHandler);
 // router:获取QQ登录二维码
 router.post('/GetQQLoginQrcode', QQGetQRcodeHandler);
-// router:设置QQ快速登录
-router.post('/SetQuickLogin', QQSetQuickLoginHandler);
 // router:获取QQ登录信息
 router.post('/GetQQLoginInfo', getQQLoginInfoHandler);
-// router:获取快速登录QQ账号
-router.post('/GetQuickLoginQQ', getAutoLoginAccountHandler);
-// router:设置自动登录QQ账号
-router.post('/SetQuickLoginQQ', setAutoLoginAccountHandler);
 // router:刷新QQ登录二维码
 router.post('/RefreshQRcode', QQRefreshQRcodeHandler);
-// router:密码登录
-router.post('/PasswordLogin', QQPasswordLoginHandler);
 // router:验证码登录（密码登录需要验证码时的第二步）
 router.post('/CaptchaLogin', QQCaptchaLoginHandler);
 // router:新设备验证登录（密码登录需要新设备验证时的第二步）

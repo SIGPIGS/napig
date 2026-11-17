@@ -19,7 +19,6 @@ import {
   OB11HttpClientAdapter,
   OB11WebSocketClientAdapter,
   OB11NetworkManager,
-  OB11NetworkReloadType,
   OB11HttpServerAdapter,
   OB11WebSocketServerAdapter,
 } from '@/napcat-onebot/network';
@@ -41,12 +40,9 @@ import { OB11FriendRecallNoticeEvent } from '@/napcat-onebot/event/notice/OB11Fr
 import { OB11GroupRecallNoticeEvent } from '@/napcat-onebot/event/notice/OB11GroupRecallNoticeEvent';
 import { BotOfflineEvent } from './event/notice/BotOfflineEvent';
 import {
-  NetworkAdapterConfig,
   OneBotConfig,
-  OneBotConfigSchema,
 } from './config/config';
 import { OB11Message } from './types';
-import { IOB11NetworkAdapter } from '@/napcat-onebot/network/adapter';
 import { OB11HttpSSEServerAdapter } from './network/http-server-sse';
 
 import { proxiedListenerOf } from '@/napcat-core/helper/proxy-handler';
@@ -77,10 +73,10 @@ export class NapCatOneBot11Adapter {
   recallEventCache = new Map<string, NodeJS.Timeout>();
   private readonly reportedRecallEventCache = new Map<string, true>();
   private readonly processingRecallEvents = new Map<string, Promise<void>>();
-  constructor (core: NapCatCore, context: InstanceContext, pathWrapper: NapCatPathWrapper) {
+  constructor (core: NapCatCore, context: InstanceContext, _pathWrapper: NapCatPathWrapper) {
     this.core = core;
     this.context = context;
-    this.configLoader = new OB11ConfigLoader(core, pathWrapper.configPath, OneBotConfigSchema);
+    this.configLoader = new OB11ConfigLoader();
     this.apis = {
       GroupApi: new OneBotGroupApi(this, core),
       UserApi: new OneBotUserApi(this, core),
@@ -185,61 +181,9 @@ export class NapCatOneBot11Adapter {
     WebUiDataRuntime.setQQVersion(this.core.context.basicInfoWrapper.getFullQQVersion());
     WebUiDataRuntime.setQQLoginInfo(selfInfo);
     WebUiDataRuntime.setQQLoginStatus(true);
-    WebUiDataRuntime.setOnOB11ConfigChanged(async (newConfig) => {
-      const prev = this.configLoader.configData;
-      this.configLoader.save(newConfig);
-      // this.context.logger.log(`OneBot11 配置更改：${JSON.stringify(prev)} -> ${JSON.stringify(newConfig)}`);
-      await this.reloadNetwork(prev, newConfig);
-    });
     this.apis.GroupApi.registerParseGroupReactEventByCore().catch(e =>
       this.context.logger.logError('注册群消息反应表情失败', e)
     );
-  }
-
-  private async reloadNetwork (prev: OneBotConfig, now: OneBotConfig): Promise<void> {
-    const prevLog = await this.creatOneBotLog(prev);
-    const newLog = await this.creatOneBotLog(now);
-    this.context.logger.log(`[Notice] [OneBot11] 配置变更前:\n${prevLog}`);
-    this.context.logger.log(`[Notice] [OneBot11] 配置变更后:\n${newLog}`);
-
-    await this.handleConfigChange(prev.network.httpServers, now.network.httpServers, OB11HttpServerAdapter);
-    await this.handleConfigChange(prev.network.httpClients, now.network.httpClients, OB11HttpClientAdapter);
-    await this.handleConfigChange(prev.network.httpSseServers, now.network.httpSseServers, OB11HttpSSEServerAdapter);
-    await this.handleConfigChange(prev.network.websocketServers, now.network.websocketServers, OB11WebSocketServerAdapter);
-    await this.handleConfigChange(prev.network.websocketClients, now.network.websocketClients, OB11WebSocketClientAdapter);
-  }
-
-  private async handleConfigChange<CT extends NetworkAdapterConfig> (
-    prevConfig: NetworkAdapterConfig[],
-    nowConfig: NetworkAdapterConfig[],
-    adapterClass: new (
-      ...args: ConstructorParameters<typeof IOB11NetworkAdapter<CT>>
-    ) => IOB11NetworkAdapter<CT>
-  ): Promise<void> {
-    // 比较旧的在新的找不到的回收
-    for (const adapterConfig of prevConfig) {
-      const existingAdapter = nowConfig.find((e) => e.name === adapterConfig.name);
-      if (!existingAdapter) {
-        const existingAdapter = this.networkManager.findSomeAdapter(adapterConfig.name);
-        if (existingAdapter) {
-          await this.networkManager.closeSomeAdaterWhenOpen([existingAdapter]);
-        }
-      }
-    }
-    // 通知新配置重载 删除关闭的 加入新开的
-    for (const adapterConfig of nowConfig) {
-      const existingAdapter = this.networkManager.findSomeAdapter(adapterConfig.name);
-      if (existingAdapter) {
-        const networkChange = await existingAdapter.reload(adapterConfig);
-        if (networkChange === OB11NetworkReloadType.NetWorkClose) {
-          await this.networkManager.closeSomeAdaterWhenOpen([existingAdapter]);
-        }
-      } else if (adapterConfig.enable) {
-        // eslint-disable-next-line new-cap
-        const newAdapter = new adapterClass(adapterConfig.name, adapterConfig as CT, this.core, this, this.actions);
-        await this.networkManager.registerAdapterAndOpen(newAdapter);
-      }
-    }
   }
 
   private initMsgListener () {

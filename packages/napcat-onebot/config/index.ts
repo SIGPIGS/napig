@@ -1,12 +1,7 @@
-import { ConfigBase } from 'napcat-core/helper/config-base';
-import type { NapCatCore } from 'napcat-core';
-import { OneBotConfig } from './config';
-import { TSchema } from '@sinclair/typebox';
+import { getNapigConfig } from 'napcat-common/src/config';
 
 export * from './config';
 
-export class OB11ConfigLoader extends ConfigBase<OneBotConfig> {
-  constructor (core: NapCatCore, configPath: string, schema: TSchema) {
-    super('onebot11', core, configPath, schema);
-  }
+export class OB11ConfigLoader {
+  readonly configData = getNapigConfig().onebot;
 }

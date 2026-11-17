@@ -1,8 +1,9 @@
+import { getNapigConfig } from 'napcat-common/src/config';
 import { RequestHandler } from 'express';
 import https from 'https';
 
 import { WebUiDataRuntime } from '@/napcat-webui-backend/src/helper/Data';
-import { WebUiConfig, webUiLogger } from '@/napcat-webui-backend/index';
+import { webUiLogger } from '@/napcat-webui-backend/index';
 import { isEmpty } from '@/napcat-webui-backend/src/utils/check';
 import { sendError, sendSuccess } from '@/napcat-webui-backend/src/utils/response';
 import {
@@ -100,15 +101,6 @@ export const QQGetQRcodeHandler: RequestHandler = async (_, res) => {
   return sendSuccess(res, data);
 };
 
-export const QQLogoutHandler: RequestHandler = async (_req, res) => {
-  try {
-    await WebUiDataRuntime.requestQQLogout();
-    return sendSuccess(res, { message: '正在退出 QQ 并重新启动登录服务' });
-  } catch (error) {
-    return sendError(res, error instanceof Error ? error.message : '退出 QQ 失败');
-  }
-};
-
 // 获取QQ登录状态
 export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
   // 从 OneBot 上下文获取实时的 selfInfo.online 状态
@@ -120,17 +112,17 @@ export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
   // 必须同时满足：已登录且在线（online 必须明确为 true）
   // 登录状态以 QQ 登录成功和 Core 明确在线为准。loginPhase 用于展示进度，
   // 不能作为跳转的额外门槛，否则 phase 事件延迟时会卡在扫码页。
-  const isLogin = !WebUiDataRuntime.isQQAccountSwitching() && !sessionExpiredReason && qqLoginStatus && isOnline === true;
+  const isLogin = !sessionExpiredReason && qqLoginStatus && isOnline === true;
   // 检测掉线状态：已登录但不在线
   const isOffline = qqLoginStatus && isOnline === false;
   const data = {
     isLogin,
+    account: getNapigConfig().account.id,
+    attempt: WebUiDataRuntime.getLoginAttempt(),
     isOffline,
     loginPhase,
     qrLoginAccepted: qqLoginStatus && (loginPhase === 'qrcode_scanned' || loginPhase === 'initializing'),
     coreReady: isLogin,
-    accountSwitching: WebUiDataRuntime.isQQAccountSwitching(),
-    canSwitchAccount: WebUiDataRuntime.canSwitchQQAccount(),
     sessionExpired: !!sessionExpiredReason,
     sessionExpiredReason,
     qrcodeurl: WebUiDataRuntime.getQQLoginQrcodeURL(),
@@ -139,42 +131,12 @@ export const QQCheckLoginStatusHandler: RequestHandler = async (_, res) => {
   return sendSuccess(res, data);
 };
 
-// 快速登录
-export const QQSetQuickLoginHandler: RequestHandler = async (req, res) => {
-  logLoginControl('quick-login');
-  // 获取QQ号
-  const { uin } = req.body;
-  // 判断是否已经登录
-  const isLogin = WebUiDataRuntime.getQQLoginStatus();
-  if (isLogin) {
-    return sendError(res, 'QQ Is Logined');
-  }
-  // 判断QQ号是否为空
-  if (isEmpty(uin)) {
-    return sendError(res, 'uin is empty');
-  }
-
-  // 获取快速登录状态
-  const { result, message, needPhoneConfirm } = await WebUiDataRuntime.requestQuickLogin(uin);
-  if (needPhoneConfirm) return sendSuccess(res, { needPhoneConfirm: true });
-  if (!result) {
-    return sendError(res, message);
-  }
-  // 本来应该验证 但是http不宜这么搞 建议前端验证
-  // isLogin = WebUiDataRuntime.getQQLoginStatus();
-  return sendSuccess(res, null);
-};
-
-// 获取快速登录列表
-export const QQGetQuickLoginListHandler: RequestHandler = async (_, res) => {
-  const quickLoginList = WebUiDataRuntime.getQQQuickLoginList();
-  return sendSuccess(res, quickLoginList);
-};
-
-// 获取快速登录列表（新）
-export const QQGetLoginListNewHandler: RequestHandler = async (_, res) => {
-  const newLoginList = WebUiDataRuntime.getQQNewLoginList();
-  return sendSuccess(res, newLoginList);
+export const QQLoginHandler: RequestHandler = async (req, res) => {
+  const { method = 'auto' } = req.body;
+  if (method !== 'auto' && method !== 'qr') return sendError(res, '无效的登录方式');
+  logLoginControl(method);
+  const result = await WebUiDataRuntime.requestAccountLogin(method);
+  return result.result ? sendSuccess(res, result) : sendError(res, result.message);
 };
 
 // 获取登录的QQ的信息
@@ -188,23 +150,9 @@ export const getQQLoginInfoHandler: RequestHandler = async (_, res) => {
   const data = {
     ...basicInfo,
     online,
-    canSwitchAccount: WebUiDataRuntime.canSwitchQQAccount(),
     avatarUrl,
   };
   return sendSuccess(res, data);
-};
-
-// 获取自动登录QQ账号
-export const getAutoLoginAccountHandler: RequestHandler = async (_, res) => {
-  const data = WebUiConfig.getAutoLoginAccount();
-  return sendSuccess(res, data);
-};
-
-// 设置自动登录QQ账号
-export const setAutoLoginAccountHandler: RequestHandler = async (req, res) => {
-  const { uin } = req.body;
-  await WebUiConfig.UpdateAutoLoginAccount(uin);
-  return sendSuccess(res, null);
 };
 
 // 刷新QQ登录二维码
@@ -231,85 +179,18 @@ export const QQRefreshQRcodeHandler: RequestHandler = async (_, res) => {
   }
 };
 
-// 密码登录
-export const QQPasswordLoginHandler: RequestHandler = async (req, res) => {
-  logLoginControl('password-login');
-  // 获取QQ号和密码MD5
-  const { uin, passwordMd5 } = req.body;
-  // 判断是否已经登录
-  const isLogin = WebUiDataRuntime.getQQLoginStatus();
-  if (isLogin) {
-    return sendError(res, 'QQ Is Logined');
-  }
-  // 判断QQ号是否为空
-  if (isEmpty(uin)) {
-    return sendError(res, 'uin is empty');
-  }
-  // 判断密码MD5是否为空
-  if (isEmpty(passwordMd5)) {
-    return sendError(res, 'passwordMd5 is empty');
-  }
-
-  // 执行密码登录
-  const { result, message, needCaptcha, proofWaterUrl, needNewDevice, jumpUrl, newDevicePullQrCodeSig } = await WebUiDataRuntime.requestPasswordLogin(uin, passwordMd5);
-  if (!result) {
-    if (needCaptcha && proofWaterUrl) {
-      return sendSuccess(res, { needCaptcha: true, proofWaterUrl });
-    }
-    if (needNewDevice && jumpUrl) {
-      return sendSuccess(res, { needNewDevice: true, jumpUrl, newDevicePullQrCodeSig });
-    }
-    return sendError(res, message);
-  }
-  return sendSuccess(res, null);
-};
-
-// 验证码登录（密码登录需要验证码时的第二步）
 export const QQCaptchaLoginHandler: RequestHandler = async (req, res) => {
-  const { uin, passwordMd5, ticket, randstr, sid } = req.body;
-  const isLogin = WebUiDataRuntime.getQQLoginStatus();
-  if (isLogin) {
-    return sendError(res, 'QQ Is Logined');
-  }
-  if (isEmpty(uin) || isEmpty(passwordMd5)) {
-    return sendError(res, 'uin or passwordMd5 is empty');
-  }
-  if (isEmpty(ticket) || isEmpty(randstr)) {
-    return sendError(res, 'captcha ticket or randstr is empty');
-  }
-
-  const { result, message, needNewDevice, jumpUrl, newDevicePullQrCodeSig: sig } = await WebUiDataRuntime.requestCaptchaLogin(uin, passwordMd5, ticket, randstr, sid || '');
-  if (!result) {
-    if (needNewDevice && jumpUrl) {
-      return sendSuccess(res, { needNewDevice: true, jumpUrl, newDevicePullQrCodeSig: sig });
-    }
-    return sendError(res, message);
-  }
-  return sendSuccess(res, null);
+  const { attemptId, ticket, randstr, sid = '' } = req.body;
+  if (![attemptId, ticket, randstr].every(v => typeof v === 'string' && v) || typeof sid !== 'string') return sendError(res, '验证码参数不完整');
+  const result = await WebUiDataRuntime.requestCaptchaLogin(attemptId, ticket, randstr, sid);
+  return result.result ? sendSuccess(res, result) : sendError(res, result.message);
 };
 
-// 新设备验证登录（密码登录需要新设备验证时的第二步）
 export const QQNewDeviceLoginHandler: RequestHandler = async (req, res) => {
-  const { uin, passwordMd5, newDevicePullQrCodeSig } = req.body;
-  const isLogin = WebUiDataRuntime.getQQLoginStatus();
-  if (isLogin) {
-    return sendError(res, 'QQ Is Logined');
-  }
-  if (isEmpty(uin) || isEmpty(passwordMd5)) {
-    return sendError(res, 'uin or passwordMd5 is empty');
-  }
-  if (isEmpty(newDevicePullQrCodeSig)) {
-    return sendError(res, 'newDevicePullQrCodeSig is empty');
-  }
-
-  const { result, message, needNewDevice, jumpUrl, newDevicePullQrCodeSig: sig } = await WebUiDataRuntime.requestNewDeviceLogin(uin, passwordMd5, newDevicePullQrCodeSig);
-  if (!result) {
-    if (needNewDevice && jumpUrl) {
-      return sendSuccess(res, { needNewDevice: true, jumpUrl, newDevicePullQrCodeSig: sig });
-    }
-    return sendError(res, message);
-  }
-  return sendSuccess(res, null);
+  const { attemptId, token } = req.body;
+  if (typeof attemptId !== 'string' || !attemptId || typeof token !== 'string') return sendError(res, '设备验证参数不完整');
+  const result = await WebUiDataRuntime.requestNewDeviceLogin(attemptId, token);
+  return result.result ? sendSuccess(res, result) : sendError(res, result.message);
 };
 
 // 重置设备信息
@@ -678,8 +559,10 @@ export const QQResetMacDeviceIDHandler: RequestHandler = async (_, res) => {
 // ============================================================
 
 // 获取新设备验证二维码 (通过 OIDB 接口)
-export const QQGetNewDeviceQRCodeHandler: RequestHandler = async (req, res) => {
-  const { uin, jumpUrl } = req.body;
+export const QQGetNewDeviceQRCodeHandler: RequestHandler = async (_, res) => {
+  const uin = getNapigConfig().account.id;
+  const jumpUrl = WebUiDataRuntime.getLoginAttempt()?.jumpUrl;
+  if (WebUiDataRuntime.getQQLoginPhase() !== 'device_verification') return sendError(res, '设备验证已失效');
   if (!uin || !jumpUrl) {
     return sendError(res, 'uin and jumpUrl are required');
   }
@@ -710,7 +593,9 @@ export const QQGetNewDeviceQRCodeHandler: RequestHandler = async (req, res) => {
 
 // 轮询新设备验证二维码状态
 export const QQPollNewDeviceQRHandler: RequestHandler = async (req, res) => {
-  const { uin, bytesToken } = req.body;
+  const uin = getNapigConfig().account.id;
+  const { bytesToken } = req.body;
+  if (WebUiDataRuntime.getQQLoginPhase() !== 'device_verification') return sendError(res, '设备验证已失效');
   if (!uin || !bytesToken) {
     return sendError(res, 'uin and bytesToken are required');
   }

@@ -5,7 +5,6 @@
 import express from 'express';
 import type { WebUiConfigType } from './src/types';
 import { createServer, STATUS_CODES } from 'http';
-import { createHash } from 'node:crypto';
 import { createServer as createHttpsServer } from 'https';
 import { NapCatPathWrapper } from 'napcat-common/src/path';
 import { WebUiConfigWrapper } from '@/napcat-webui-backend/src/helper/config';
@@ -16,8 +15,6 @@ import { auth } from './src/middleware/auth';
 import { sendError } from '@/napcat-webui-backend/src/utils/response';
 import { join, dirname, resolve } from 'node:path';
 import multer from 'multer';
-import * as net from 'node:net';
-import { WebUiDataRuntime } from './src/helper/Data';
 import { existsSync, readFileSync } from 'node:fs'; // 引入multer用于错误捕获
 import { ILogWrapper } from 'napcat-common/src/log-interface';
 import { ISubscription } from 'napcat-common/src/subscription-interface';
@@ -42,30 +39,10 @@ export let webUiPathWrapper: NapCatPathWrapper;
 export let logSubscription: ISubscription;
 export let statusHelperSubscription: IStatusHelperSubscription;
 export let webUiLogger: ILogWrapper | null = null;
-const MAX_PORT_TRY = 100;
 
 export let webUiRuntimePort = 6099;
 export async function InitPort (parsedConfig: WebUiConfigType): Promise<[string, number]> {
-  try {
-    await tryUseHost(parsedConfig.host);
-    const preferredPort = parseInt(process.env['NAPCAT_WEBUI_PREFERRED_PORT'] || '', 10);
-
-    let port: number;
-    if (preferredPort > 0) {
-      try {
-        port = await tryUsePort(preferredPort, parsedConfig.host, 0, true);
-      } catch {
-        port = await tryUsePort(parsedConfig.port, parsedConfig.host);
-      }
-    } else {
-      port = await tryUsePort(parsedConfig.port, parsedConfig.host);
-    }
-
-    return [parsedConfig.host, port];
-  } catch (error) {
-    console.log('host或port不可用', error);
-    return ['', 0];
-  }
+  return [parsedConfig.host, parsedConfig.port];
 }
 
 async function checkCertificates (logger: ILogWrapper): Promise<{ key: string, cert: string; } | null> {
@@ -106,69 +83,6 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
     logger.log('[NapCat] [WebUi] Current WebUi is not run.');
     return;
   }
-  WebUiDataRuntime.setWebUiConfigQuickFunction(
-    async () => {
-      if (WebUiDataRuntime.isQQAccountSwitching()) return;
-      if (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') return;
-      const autoLoginAccount = process.env['NAPCAT_QUICK_ACCOUNT'] || WebUiConfig.getAutoLoginAccount();
-      const resolveQuickPasswordMd5 = (): string | undefined => {
-        const quickPasswordMd5FromEnv = process.env['NAPCAT_QUICK_PASSWORD_MD5']?.trim();
-        if (quickPasswordMd5FromEnv) {
-          if (/^[a-fA-F0-9]{32}$/.test(quickPasswordMd5FromEnv)) {
-            return quickPasswordMd5FromEnv.toLowerCase();
-          }
-          console.log('[NapCat] [WebUi] NAPCAT_QUICK_PASSWORD_MD5 格式无效（需为 32 位 MD5）');
-        }
-
-        const quickPassword = process.env['NAPCAT_QUICK_PASSWORD'];
-        if (typeof quickPassword === 'string' && quickPassword.length > 0) {
-          console.log('[NapCat] [WebUi] 检测到 NAPCAT_QUICK_PASSWORD，已在内存中计算 MD5 用于回退登录');
-          return createHash('md5').update(quickPassword, 'utf8').digest('hex');
-        }
-        return undefined;
-      };
-      if (!autoLoginAccount) {
-        return;
-      }
-      const quickPasswordMd5 = resolveQuickPasswordMd5();
-
-      try {
-        const { result, message, needPhoneConfirm } = await WebUiDataRuntime.requestQuickLogin(autoLoginAccount);
-        if (needPhoneConfirm) return;
-        if (result) {
-          console.log(`[NapCat] [WebUi] 自动快速登录成功: ${autoLoginAccount}`);
-          return;
-        }
-        console.log(`[NapCat] [WebUi] 自动快速登录失败: ${message || '未知错误'}`);
-      } catch (error) {
-        console.log('[NapCat] [WebUi] 自动快速登录异常:' + error);
-      }
-
-      if (WebUiDataRuntime.getQQSessionExpiredReason()) return;
-      if (!quickPasswordMd5) {
-        console.log(`[NapCat] [WebUi] QQ ${autoLoginAccount} 未配置回退密码环境变量，建议优先使用 ACCOUNT + NAPCAT_QUICK_PASSWORD（NAPCAT_QUICK_PASSWORD_MD5 作为备用），保持二维码登录兜底`);
-        return;
-      }
-
-      try {
-        const { result, message, needCaptcha, needNewDevice } = await WebUiDataRuntime.requestPasswordLogin(autoLoginAccount, quickPasswordMd5);
-        if (result) {
-          console.log(`[NapCat] [WebUi] 自动密码回退登录成功: ${autoLoginAccount}`);
-          return;
-        }
-        if (needCaptcha) {
-          console.log(`[NapCat] [WebUi] 自动密码回退登录需要验证码，请在登录页面继续完成: ${autoLoginAccount}`);
-          return;
-        }
-        if (needNewDevice) {
-          console.log(`[NapCat] [WebUi] 自动密码回退登录需要新设备验证，请在登录页面继续完成: ${autoLoginAccount}`);
-          return;
-        }
-        console.log(`[NapCat] [WebUi] 自动密码回退登录失败: ${message || '未知错误'}`);
-      } catch (error) {
-        console.log('[NapCat] [WebUi] 自动密码回退登录异常:' + error);
-      }
-    });
   // ------------注册中间件------------
   // 使用express的json中间件
   app.use(auth);
@@ -351,64 +265,4 @@ export async function InitWebUi (logger: ILogWrapper, pathWrapper: NapCatPathWra
   });
 
   // ------------Over！------------
-}
-
-async function tryUseHost (host: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    try {
-      const server = net.createServer();
-      server.on('listening', () => {
-        server.close();
-        resolve(host);
-      });
-
-      server.on('error', (err: any) => {
-        if (err.code === 'EADDRNOTAVAIL') {
-          reject(new Error('主机地址验证失败，可能为非本机地址'));
-        } else {
-          reject(new Error(`遇到错误: ${err.code}`));
-        }
-      });
-
-      // 尝试监听 让系统随机分配一个端口
-      server.listen(0, host);
-    } catch (error) {
-      // 这里捕获到的错误应该是启动服务器时的同步错误
-      reject(new Error(`服务器启动时发生错误: ${error}`));
-    }
-  });
-}
-
-async function tryUsePort (port: number, host: string, tryCount: number = 0, singleTry: boolean = false): Promise<number> {
-  return new Promise((resolve, reject) => {
-    try {
-      const server = net.createServer();
-      server.on('listening', () => {
-        server.close();
-        resolve(port);
-      });
-
-      server.on('error', (err: any) => {
-        if (err.code === 'EADDRINUSE') {
-          if (singleTry) {
-            // 只尝试一次，端口被占用则直接失败
-            reject(new Error(`端口 ${port} 已被占用`));
-          } else if (tryCount < MAX_PORT_TRY) {
-            // 递归尝试下一个端口
-            resolve(tryUsePort(port + 1, host, tryCount + 1, false));
-          } else {
-            reject(new Error(`端口尝试失败，达到最大尝试次数: ${MAX_PORT_TRY}`));
-          }
-        } else {
-          reject(new Error(`遇到错误: ${err.code}`));
-        }
-      });
-
-      // 尝试监听端口
-      server.listen(port, host);
-    } catch (error) {
-      // 这里捕获到的错误应该是启动服务器时的同步错误
-      reject(new Error(`服务器启动时发生错误: ${error}`));
-    }
-  });
 }

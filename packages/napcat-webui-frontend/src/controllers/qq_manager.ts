@@ -4,10 +4,6 @@ import { serverRequest } from '@/utils/request';
 import { SelfInfo } from '@/types/user';
 
 export default class QQManager {
-  public static async logout () {
-    await serverRequest.post('/QQLogin/Logout', {}, { timeout: 25_000 });
-  }
-
   public static async getOB11Config () {
     const data = await serverRequest.post<ServerResponse<OneBotConfig>>(
       '/OB11Config/GetConfig'
@@ -27,10 +23,10 @@ export default class QQManager {
       ServerResponse<{
         isLogin: boolean;
         isOffline?: boolean;
-        accountSwitching?: boolean;
-        canSwitchAccount?: boolean;
         sessionExpired?: boolean;
         sessionExpiredReason?: string;
+        account: string;
+        attempt?: { id: string; proofWaterUrl?: string; jumpUrl?: string };
         qrcodeurl: string;
       }>
     >('/QQLogin/CheckLoginStatus');
@@ -41,15 +37,15 @@ export default class QQManager {
   public static async checkQQLoginStatusWithQrcode () {
     const data = await serverRequest.post<
       ServerResponse<{
+        account: string;
+        attempt?: { id: string; proofWaterUrl?: string; jumpUrl?: string };
         qrcodeurl: string;
         isLogin: boolean;
         isOffline?: boolean;
-        accountSwitching?: boolean;
-        canSwitchAccount?: boolean;
         sessionExpired?: boolean;
         sessionExpiredReason?: string;
         loginError?: string;
-        loginPhase?: 'logging_out' | 'waiting_phone_confirm' | 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'qrcode_failed' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
+        loginPhase?: 'logging_in' | 'captcha_required' | 'device_verification' | 'waiting_phone_confirm' | 'waiting_qrcode' | 'generating_qrcode' | 'qrcode_scanned' | 'qrcode_failed' | 'initializing' | 'ready' | 'offline' | 'reconnecting';
         qrLoginAccepted?: boolean;
         coreReady?: boolean;
       }>
@@ -73,19 +69,6 @@ export default class QQManager {
     return data.data.data.qrcode;
   }
 
-  public static async getQQQuickLoginListNew () {
-    const data = await serverRequest.post<ServerResponse<LoginListItem[]>>(
-      '/QQLogin/GetQuickLoginListNew'
-    );
-    return data.data.data;
-  }
-
-  public static async setQuickLogin (uin: string) {
-    await serverRequest.post<ServerResponse<null>>('/QQLogin/SetQuickLogin', {
-      uin,
-    });
-  }
-
   public static async getQQLoginInfo (config?: AxiosRequestConfig) {
     const data = await serverRequest.post<ServerResponse<SelfInfo>>(
       '/QQLogin/GetQQLoginInfo',
@@ -95,59 +78,16 @@ export default class QQManager {
     return data.data.data;
   }
 
-  public static async getQuickLoginQQ () {
-    const { data } = await serverRequest.post<ServerResponse<string>>(
-      '/QQLogin/GetQuickLoginQQ'
-    );
-    return data.data;
+  public static async login (method: 'auto' | 'qr') {
+    await serverRequest.post('/QQLogin/Login', { method });
   }
 
-  public static async setQuickLoginQQ (uin: string) {
-    await serverRequest.post<ServerResponse<null>>('/QQLogin/SetQuickLoginQQ', {
-      uin,
-    });
+  public static async captchaLogin (attemptId: string, ticket: string, randstr: string, sid: string) {
+    await serverRequest.post('/QQLogin/CaptchaLogin', { attemptId, ticket, randstr, sid });
   }
 
-  public static async passwordLogin (uin: string, passwordMd5: string) {
-    const data = await serverRequest.post<ServerResponse<{
-      needCaptcha?: boolean;
-      proofWaterUrl?: string;
-      needNewDevice?: boolean;
-      jumpUrl?: string;
-      newDevicePullQrCodeSig?: string;
-    } | null>>('/QQLogin/PasswordLogin', {
-      uin,
-      passwordMd5,
-    });
-    return data.data.data;
-  }
-
-  public static async captchaLogin (uin: string, passwordMd5: string, ticket: string, randstr: string, sid: string) {
-    const data = await serverRequest.post<ServerResponse<{
-      needNewDevice?: boolean;
-      jumpUrl?: string;
-      newDevicePullQrCodeSig?: string;
-    } | null>>('/QQLogin/CaptchaLogin', {
-      uin,
-      passwordMd5,
-      ticket,
-      randstr,
-      sid,
-    });
-    return data.data.data;
-  }
-
-  public static async newDeviceLogin (uin: string, passwordMd5: string, newDevicePullQrCodeSig: string) {
-    const data = await serverRequest.post<ServerResponse<{
-      needNewDevice?: boolean;
-      jumpUrl?: string;
-      newDevicePullQrCodeSig?: string;
-    } | null>>('/QQLogin/NewDeviceLogin', {
-      uin,
-      passwordMd5,
-      newDevicePullQrCodeSig,
-    });
-    return data.data.data;
+  public static async newDeviceLogin (attemptId: string, token: string) {
+    await serverRequest.post('/QQLogin/NewDeviceLogin', { attemptId, token });
   }
 
   public static async getNewDeviceQRCode (uin: string, jumpUrl: string) {

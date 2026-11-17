@@ -16,7 +16,9 @@
     }
   },
   "dependencies": {
-    "file-type": "^21.0.0"
+    "file-type": "^21.0.0",
+    "yaml": "2.8.2",
+    "@sinclair/typebox": "^0.34.41"
   },
   "devDependencies": {
     "@types/node": "^22.0.1"

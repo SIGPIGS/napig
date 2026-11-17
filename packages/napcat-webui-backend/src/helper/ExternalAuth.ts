@@ -1,3 +1,4 @@
+import { getNapigConfig } from 'napcat-common/src/config';
 import type { IncomingMessage } from 'node:http';
 
 type AuthRequest = Pick<IncomingMessage, 'headers' | 'method'>;
@@ -7,13 +8,13 @@ let publicOrigin: string | undefined;
 // The gateway must replace this header and prevent direct access to the backend.
 export const AUTH_USER_HEADER = 'x-auth-request-user';
 
-export function configureExternalAuth (value = process.env['NAPCAT_WEBUI_PUBLIC_URL']): string {
+export function configureExternalAuth (value = getNapigConfig().webui['public-url']): string {
   publicOrigin = undefined;
-  if (!value) throw new Error('NAPCAT_WEBUI_PUBLIC_URL is required for external WebUI authentication');
+  if (!value) throw new Error('webui.public-url is required for external WebUI authentication');
   const url = new URL(value);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
     url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('NAPCAT_WEBUI_PUBLIC_URL must be an HTTP(S) origin without a path, credentials, query or fragment');
+    throw new Error('webui.public-url must be an HTTP(S) origin without a path, credentials, query or fragment');
   }
   publicOrigin = url.origin;
   return publicOrigin;

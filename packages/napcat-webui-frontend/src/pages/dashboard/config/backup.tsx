@@ -1,48 +1,7 @@
 import { Button } from '@heroui/button';
 import toast from 'react-hot-toast';
-import { LuDownload, LuUpload } from 'react-icons/lu';
+import { LuDownload } from 'react-icons/lu';
 import { requestServerWithFetch } from '@/utils/request';
-
-// 导入配置
-const handleImportConfig = async (event: React.ChangeEvent<HTMLInputElement>) => {
-  const file = event.target.files?.[0];
-  if (!file) return;
-
-  // 检查文件类型
-  if (!file.name.endsWith('.zip')) {
-    toast.error('请选择zip格式的配置文件');
-    return;
-  }
-
-  try {
-    const formData = new FormData();
-    formData.append('configFile', file);
-
-    const response = await requestServerWithFetch('/OB11Config/ImportConfig', {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || '导入配置失败');
-    }
-
-    const result = await response.json();
-    // 检查是否成功导入
-    if (result.code === 0) {
-      toast.success(result.data?.message || '配置导入成功。');
-    } else {
-      toast.error(`配置导入失败: ${result.data?.message || '未知错误'}`);
-    }
-  } catch (error) {
-    const msg = (error as Error).message;
-    toast.error(`导入配置失败: ${msg}`);
-  } finally {
-    // 重置文件输入
-    event.target.value = '';
-  }
-};
 
 // 导出配置
 const handleExportConfig = async () => {
@@ -60,7 +19,7 @@ const handleExportConfig = async () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const fileName = response.headers.get('Content-Disposition')?.split('=')[1]?.replace(/"/g, '') || 'config_backup.zip';
+    const fileName = response.headers.get('Content-Disposition')?.split('=')[1]?.replace(/"/g, '') || 'onebot.json';
     a.download = fileName;
     document.body.appendChild(a);
     a.click();
@@ -75,54 +34,16 @@ const handleExportConfig = async () => {
   }
 };
 
-const BackupConfigCard: React.FC = () => {
-  return (
-    <div className='space-y-6'>
-      <div>
-        <h3 className='text-lg font-medium mb-4'>备份与恢复</h3>
-        <p className='text-sm text-default-500 mb-4'>
-          您可以通过导入/导出配置文件来备份和恢复NapCat的所有设置
-        </p>
-
-        <div className='flex flex-wrap gap-3'>
-          <Button
-            isIconOnly
-            className='bg-primary hover:bg-primary/90 text-white'
-            radius='full'
-            onPress={handleExportConfig}
-            title='导出配置'
-          >
-            <LuUpload size={20} />
-          </Button>
-          <label className='cursor-pointer'>
-            <input
-              type='file'
-              accept='.zip'
-              onChange={handleImportConfig}
-              className='hidden'
-            />
-            <Button
-              isIconOnly
-              className='bg-primary hover:bg-primary/90 text-white'
-              radius='full'
-              as='span'
-              title='导入配置'
-            >
-              <LuDownload size={20} />
-            </Button>
-          </label>
-        </div>
-
-        <div className='mt-4 p-3 bg-warning/10 border border-warning/20 rounded-lg'>
-          <div className='flex items-start gap-2'>
-            <p className='text-sm text-warning'>
-              导入配置会覆盖当前所有设置，请谨慎操作。导入前建议先导出当前配置作为备份。
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+const BackupConfigCard: React.FC = () => (
+  <div className='space-y-4'>
+    <h3 className='text-lg font-medium'>导出 OneBot 配置</h3>
+    <p className='text-sm text-default-500'>
+      导出当前生效的 OneBot 配置（含连接 token）。完整配置请备份部署中的 napig.yaml；修改后重启生效。
+    </p>
+    <Button onPress={handleExportConfig} startContent={<LuDownload size={20} />}>
+      下载 onebot.json
+    </Button>
+  </div>
+);
 
 export default BackupConfigCard;

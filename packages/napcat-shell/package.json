@@ -24,7 +24,8 @@
     "napcat-webui-backend": "workspace:*",
     "napcat-qrcode": "workspace:*",
     "napcat-protobuf": "workspace:*",
-    "napcat-database": "workspace:*"
+    "napcat-database": "workspace:*",
+    "@tencent-connect/qqbot-nodejs": "1.0.5"
   },
   "devDependencies": {
     "json5": "^2.2.3",

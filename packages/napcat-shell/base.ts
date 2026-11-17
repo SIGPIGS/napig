@@ -20,11 +20,10 @@ import { hostname, systemVersion } from 'napcat-common/src/system';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { createHash } from 'node:crypto';
 import { LoginListItem, NodeIKernelLoginService } from 'napcat-core/services';
 import qrcode from 'napcat-qrcode/lib/main';
 import { NapCatAdapterManager } from 'napcat-adapter';
-import { InitWebUi, WebUiConfig } from 'napcat-webui-backend/index';
+import { InitWebUi } from 'napcat-webui-backend/index';
 import { WebUiDataRuntime } from 'napcat-webui-backend/src/helper/Data';
 import { napCatVersion } from 'napcat-common/src/version';
 import { NodeIO3MiscListener } from 'napcat-core/listeners/NodeIO3MiscListener';
@@ -44,10 +43,10 @@ import { migrateLegacyGlobalPath } from './global-migrate';
 import { getDataPaths } from './data-path';
 import { connectToNamedPipe } from './pipe';
 import { runStartupStep } from './startup-step';
-import { createQuickLoginFlow } from './quick-login';
+import { createManagedLogin } from './managed-login';
+import { getNapigConfig } from 'napcat-common/src/config';
 import { getLoginDiagnostics } from '@/napcat-core/helper/login-diagnostics';
 import { connectionDiagnostics, startConnectionDiagnostics, summarizeLoginArguments } from '@/napcat-core/helper/connection-diagnostics';
-import { createAccountSwitch } from './account-switch';
 
 // NapCat Shell App ES 入口文件
 async function handleUncaughtExceptions (logger: LogWrapper) {
@@ -127,7 +126,7 @@ function configureLoginPreferences (
 }
 
 function requestLoginQRCode (loginService: NodeIKernelLoginService, logger: LogWrapper) {
-  if (['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return false;
+  if (!['generating_qrcode', 'waiting_qrcode', 'qrcode_scanned'].includes(WebUiDataRuntime.getQQLoginPhase())) return false;
   process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] = '0';
   // Reapply after the login service is connected, immediately before QR creation.
   configureLoginPreferences(loginService, logger, 'beforeQRCode');
@@ -171,7 +170,7 @@ function prepareLogin (
     isLogined: context.isLogined,
     loginPhase: WebUiDataRuntime.getQQLoginPhase(),
   });
-  let quickLoginUin: string | undefined;
+  let managedLogin: ReturnType<typeof createManagedLogin> | undefined;
   let historyLoginList: LoginListItem[] = [];
   let inner_resolve: (value: SelfInfo) => void;
   const selfInfo: Promise<SelfInfo> = new Promise((resolve) => {
@@ -188,7 +187,6 @@ function prepareLogin (
   const advanceLogin = async () => {
     if (!startupReady || !loginServiceConnected) return;
     resolveConnection();
-    if (WebUiDataRuntime.isQQAccountSwitching() && WebUiDataRuntime.getOneBotContext()) return;
     if (context.isLogined || loginFlowRunning || WebUiDataRuntime.getQQLoginPhase() === 'waiting_phone_confirm') return;
     loginFlowRunning = true;
     try {
@@ -196,12 +194,12 @@ function prepareLogin (
       if (!loginServiceConnected || context.isLogined) return;
       if (!context.loginFlowInitialized) {
         context.loginFlowInitialized = true;
-        await handleLoginInner(context, logger, loginService, quickLoginUin, historyLoginList);
+        managedLogin = createManagedLogin(loginService, () => requestLoginQRCode(loginService, logger), historyLoginList.some(item => item.uin === getNapigConfig().account.id));
+        context.cancelQuickLogin = managedLogin.clear;
+        await managedLogin.start(process.env['NAPCAT_LOGIN_METHOD'] === 'qr' || (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') ? 'qr' : 'auto');
         return;
       }
-      WebUiDataRuntime.setQQLoginPhase('generating_qrcode');
-      const requested = requestLoginQRCode(loginService, logger);
-      logger.logWarn('[Core] [Login] 登录服务重连完成，正在获取二维码', { requested, msfStatus: loginService.getMsfStatus() });
+      await managedLogin?.start('qr');
     } catch (e) {
       logger.logError(e);
       WebUiDataRuntime.setQQLoginError(`QQ 登录服务初始化失败: ${(e as Error).message}`);
@@ -211,37 +209,16 @@ function prepareLogin (
     }
   };
 
-  const accountSwitch = createAccountSwitch({
-    onBegin: async () => {
-      context.cancelQuickLogin?.();
-      WebUiDataRuntime.setQQAccountSwitching(true);
-      WebUiDataRuntime.setQQLoginQrcodeURL('');
-      WebUiDataRuntime.setQQLoginError('');
-      WebUiDataRuntime.setQQLoginPhase('logging_out');
-      await WebUiDataRuntime.prepareQQAccountSwitch();
-    },
-    onRestarting: () => {
-      context.isLogined = false;
-      WebUiDataRuntime.setQQLoginStatus(false);
-      WebUiDataRuntime.getOneBotContext()?.core?.setOnline(false);
-      WebUiDataRuntime.setQQLoginPhase('reconnecting');
-    },
-    restart: () => WebUiDataRuntime.requestRestartProcess({ switchAccount: true }),
-    onError: message => {
-      WebUiDataRuntime.setQQLoginPhase('offline');
-      WebUiDataRuntime.setQQLoginError(message);
-    },
-  });
-  WebUiDataRuntime.setQQLogoutCallback(async () => {
-    if (!context.isLogined && !accountSwitch.isActive()) throw new Error('当前没有已登录的 QQ 账号');
-    await accountSwitch.start();
-  });
-
   const loginListener = new NodeIKernelLoginListener();
   // Keep unknown callback payloads out of logs: these can contain login credentials.
   for (const event of ['onLoginState', 'onLogoutFailed', 'onQRCodeSessionQuickLoginFailed', 'onPasswordLoginFailed', 'OnConfirmUnusualDeviceFailed', 'onQQLoginNumLimited'] as const) {
     loginListener[event] = (...args: unknown[]) => {
       logger.logWarn('[Core] [NativeLoginEvent]', { event, ...diagnostics(), ...summarizeLoginArguments(args) });
+      if (event === 'onQQLoginNumLimited' && !context.isLogined) {
+        context.cancelQuickLogin?.();
+        WebUiDataRuntime.setAccountReason('login_failed', 'QQ 登录验证失败，请重新登录');
+        WebUiDataRuntime.setQQLoginPhase('offline');
+      }
     };
   }
   loginListener.onUserLoggedIn = (userid: string) => {
@@ -250,11 +227,18 @@ function prepareLogin (
     WebUiDataRuntime.setQQLoginError(tips);
   };
   loginListener.onQRCodeLoginSucceed = async (loginResult) => {
-    if (accountSwitch.isActive()) return;
     if (WebUiDataRuntime.getOneBotContext()?.core?.sessionExpiredReason || WebUiDataRuntime.getQQLoginPhase() === 'qrcode_failed') return;
+    if (String(loginResult.uin) !== getNapigConfig().account.id) {
+      context.cancelQuickLogin?.();
+      WebUiDataRuntime.setQQLoginStatus(false);
+      WebUiDataRuntime.setQQLoginQrcodeURL('');
+      WebUiDataRuntime.setAccountReason('account_mismatch', '扫码账号与配置账号不一致，请使用配置中的 QQ 重新登录');
+      WebUiDataRuntime.setQQLoginPhase('offline');
+      await WebUiDataRuntime.requestRestartProcess({ loginMethod: 'qr' });
+      return;
+    }
     logger.log('[Core] [Login] 原生登录成功通知', diagnostics());
-    WebUiDataRuntime.setQQAccountSwitching(false);
-    process.env['NAPCAT_SWITCH_ACCOUNT'] = '0';
+    WebUiDataRuntime.setAccountReason(undefined, '');
     WebUiDataRuntime.setQQSessionExpiredReason('');
     process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] = '0';
     context.cancelQuickLogin?.();
@@ -278,16 +262,15 @@ function prepareLogin (
   loginListener.onLoginDisConnected = (...args: unknown[]) => {
     logger.logWarn('[Core] [Login] onLoginDisConnected', { ...diagnostics(), ...summarizeLoginArguments(args) });
     context.cancelQuickLogin?.();
+    WebUiDataRuntime.setAccountReason('login_failed', 'QQ 登录服务连接已断开');
     loginServiceConnected = false;
     context.isLogined = false;
     WebUiDataRuntime.setQQLoginStatus(false);
-    if (accountSwitch.isActive()) return;
     WebUiDataRuntime.setQQLoginPhase('offline');
     logger.logWarn('[Core] [Login] 登录服务已断开，将允许重新获取二维码');
   };
   loginListener.onLogoutSucceed = (...args: unknown[]) => {
     logger.logWarn('[Core] [Login] onLogoutSucceed', { ...diagnostics(), ...summarizeLoginArguments(args) });
-    if (accountSwitch.isActive()) return;
     context.cancelQuickLogin?.();
     context.isLogined = false;
     WebUiDataRuntime.setQQLoginStatus(false);
@@ -304,7 +287,8 @@ function prepareLogin (
     logger.log('[Core] [Login] onLoginConnecting', diagnostics());
   };
   loginListener.onQRCodeGetPicture = ({ pngBase64QrcodeData, qrcodeUrl }) => {
-    if (accountSwitch.isActive() || ['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
+    if (!qrcodeUrl) return;
+    if (!['generating_qrcode', 'waiting_qrcode', 'qrcode_scanned'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
     WebUiDataRuntime.setQQLoginQrcodeURL(qrcodeUrl);
     WebUiDataRuntime.setQQLoginError('');
     WebUiDataRuntime.setQQLoginPhase('waiting_qrcode');
@@ -335,13 +319,13 @@ function prepareLogin (
   };
 
   loginListener.onQRCodeSessionUserScaned = () => {
-    if (accountSwitch.isActive() || ['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
+    if (!['generating_qrcode', 'waiting_qrcode', 'qrcode_scanned'].includes(WebUiDataRuntime.getQQLoginPhase())) return;
     WebUiDataRuntime.setQQLoginPhase('qrcode_scanned');
     logger.log('[Core] [Login] 二维码已被扫描，等待确认...');
   };
 
   loginListener.onQRCodeSessionFailed = (errType: number, errCode: number) => {
-    if (!accountSwitch.isActive() && !context.isLogined && !['waiting_phone_confirm', 'qrcode_failed'].includes(WebUiDataRuntime.getQQLoginPhase())) {
+    if (!context.isLogined && ['generating_qrcode', 'waiting_qrcode', 'qrcode_scanned'].includes(WebUiDataRuntime.getQQLoginPhase())) {
       logger.logError('[Core] [Login] Login Error,ErrType: ', errType, ' ErrCode:', errCode, diagnostics());
       if (errType === 1 && errCode === 5) {
         WebUiDataRuntime.setQQLoginStatus(false);
@@ -360,40 +344,23 @@ function prepareLogin (
   };
 
   loginListener.onLoginFailed = (...args) => {
-    if (accountSwitch.isActive()) return;
+    if (context.isLogined) return;
     context.cancelQuickLogin?.();
-    const errInfo = JSON.stringify(args);
     logger.logError('[Core] [Login] Login Error', { ...diagnostics(), ...summarizeLoginArguments(args) });
-    WebUiDataRuntime.setQQLoginError(`登录失败: ${errInfo}`);
+    WebUiDataRuntime.setAccountReason('login_failed', 'QQ 登录失败，请重新登录');
+    WebUiDataRuntime.setQQLoginPhase('offline');
   };
 
-  // Register refresh alongside the listener, including during early startup.
   WebUiDataRuntime.setRefreshQRCodeCallback(async () => {
-    logger.logWarn('[Core] [LoginControl]', { action: 'refresh-qrcode', ...diagnostics() });
-    if (!startupReady || !loginServiceConnected || !context.loginFlowInitialized) {
-      throw new Error('QQ 登录服务尚未就绪，请稍后重试');
-    }
-    context.cancelQuickLogin?.();
-    context.isLogined = false;
-    const msfStatus = loginService.getMsfStatus();
-    if (msfStatus === 2) {
-      // KickedOffLine 会在后台负责重启 Worker。这里不能重启：该回调由
-      // RefreshQRcode HTTP 请求触发，重启会中断正在等待响应的请求。
-      WebUiDataRuntime.setQQLoginPhase('reconnecting');
-      throw new Error('QQ_LOGIN_SERVICE_RESTARTING');
-    }
-    const requested = requestLoginQRCode(loginService, logger);
-    logger.logWarn('[Core] [Login] 请求刷新二维码', { requested, msfStatus });
-    if (!requested) {
-      throw new Error('QQ 未接受二维码刷新请求');
-    }
+    if (!startupReady || !loginServiceConnected || !managedLogin) throw new Error('QQ 登录服务尚未就绪');
+    const result = await managedLogin.start('qr');
+    if (!result.result) throw new Error(result.message);
   });
 
   loginService.addKernelLoginListener(proxiedListenerOf(loginListener, logger));
   logger.log('[Core] [Login] listener registered before initialization');
   return {
-    start: async (uin: string | undefined, history: LoginListItem[]): Promise<SelfInfo> => {
-      quickLoginUin = uin;
+    start: async (history: LoginListItem[]): Promise<SelfInfo> => {
       historyLoginList = history;
       startupReady = true;
       runStartupStep(logger, 'connectLoginService', () => connection).catch(() => {
@@ -415,340 +382,6 @@ interface LoginContext {
   isLogined: boolean;
   loginFlowInitialized: boolean;
   cancelQuickLogin?: () => void;
-}
-
-async function handleLoginInner (context: LoginContext, logger: LogWrapper, loginService: NodeIKernelLoginService, quickLoginUin: string | undefined, historyLoginList: LoginListItem[]) {
-  const resolveQuickPasswordMd5 = (): string | undefined => {
-    const quickPasswordMd5 = process.env['NAPCAT_QUICK_PASSWORD_MD5']?.trim();
-    if (quickPasswordMd5) {
-      if (/^[a-fA-F0-9]{32}$/.test(quickPasswordMd5)) {
-        return quickPasswordMd5.toLowerCase();
-      }
-      logger.logError('NAPCAT_QUICK_PASSWORD_MD5 格式无效（需为 32 位 MD5）');
-    }
-
-    const quickPassword = process.env['NAPCAT_QUICK_PASSWORD'];
-    if (typeof quickPassword === 'string' && quickPassword.length > 0) {
-      logger.log('检测到 NAPCAT_QUICK_PASSWORD，已在内存中计算 MD5 用于回退登录');
-      return createHash('md5').update(quickPassword, 'utf8').digest('hex');
-    }
-
-    return undefined;
-  };
-
-  const quickLogin = createQuickLoginFlow({
-    login: uin => loginService.quickLoginWithUin(uin),
-    onResponse: response => logger.log('[Core] [Login] 快速登录返回', {
-      ...getLoginDiagnostics(() => loginService.getMsfStatus()),
-      result: response.result,
-      step: response.loginErrorInfo?.step,
-      loginPhase: WebUiDataRuntime.getQQLoginPhase(),
-    }),
-    onWaiting: () => {
-      WebUiDataRuntime.setQQLoginQrcodeURL('');
-      WebUiDataRuntime.setQQLoginError('');
-      WebUiDataRuntime.setQQLoginPhase('waiting_phone_confirm');
-      logger.log('[Core] [Login] 等待手机确认快速登录，暂停二维码兜底');
-    },
-    onSuccess: () => {
-      WebUiDataRuntime.setQQLoginStatus(true);
-      WebUiDataRuntime.setQQLoginError('');
-      WebUiDataRuntime.setQQLoginPhase(context.isLogined ? WebUiDataRuntime.getQQLoginPhase() : 'initializing');
-    },
-    onBackgroundFailure: message => {
-      if (context.isLogined) return;
-      logger.logWarn('[Core] [Login] 手机确认快速登录结束', message);
-      WebUiDataRuntime.setQQLoginPhase('generating_qrcode');
-      requestLoginQRCode(loginService, logger);
-      WebUiDataRuntime.setQQLoginError(message);
-    },
-  });
-  context.cancelQuickLogin = () => {
-    quickLogin.cancel();
-    if (WebUiDataRuntime.getQQLoginPhase() === 'waiting_phone_confirm') {
-      WebUiDataRuntime.setQQLoginPhase('waiting_qrcode');
-    }
-  };
-  WebUiDataRuntime.setQuickLoginCall(async (uin: string) => {
-    logger.logWarn('[Core] [LoginControl]', { action: 'quick-login', ...getLoginDiagnostics(() => loginService.getMsfStatus()), loginPhase: WebUiDataRuntime.getQQLoginPhase() });
-    if (!uin) return { result: false, message: '快速登录账号为空' };
-    logger.log('正在快速登录 ', uin);
-    const outcome = await quickLogin.start(uin);
-    if (context.isLogined) return { result: true, message: '' };
-    if (!outcome.result && !outcome.needPhoneConfirm && !outcome.cancelled) {
-      WebUiDataRuntime.setQQLoginError(outcome.message);
-      requestLoginQRCode(loginService, logger);
-    }
-    return outcome;
-  });
-
-  // 注册密码登录回调
-  WebUiDataRuntime.setPasswordLoginCall(async (uin: string, passwordMd5: string) => {
-    logger.logWarn('[Core] [LoginControl]', { action: 'password-login', ...getLoginDiagnostics(() => loginService.getMsfStatus()), loginPhase: WebUiDataRuntime.getQQLoginPhase() });
-    context.cancelQuickLogin?.();
-    return await new Promise((resolve) => {
-      if (uin && passwordMd5) {
-        logger.log('正在密码登录 ', uin);
-        loginService.passwordLogin({
-          uin,
-          passwordMd5,
-          step: 0,
-          newDeviceLoginSig: new Uint8Array(),
-          proofWaterSig: new Uint8Array(),
-          proofWaterRand: new Uint8Array(),
-          proofWaterSid: new Uint8Array(),
-          unusualDeviceCheckSig: new Uint8Array(),
-        }).then(res => {
-          if (res.result === '140022008') {
-            const proofWaterUrl = res.loginErrorInfo?.proofWaterUrl || '';
-            logger.log('需要验证码, proofWaterUrl: ', proofWaterUrl);
-            resolve({
-              result: false,
-              message: '需要验证码',
-              needCaptcha: true,
-              proofWaterUrl,
-            });
-          } else if (res.result === '140022010') {
-            const jumpUrl = res.loginErrorInfo?.jumpUrl || '';
-            const newDevicePullQrCodeSig = res.loginErrorInfo?.newDevicePullQrCodeSig || '';
-            logger.log('新设备需要扫码验证, jumpUrl: ', jumpUrl);
-            resolve({
-              result: false,
-              message: '新设备需要扫码验证',
-              needNewDevice: true,
-              jumpUrl,
-              newDevicePullQrCodeSig,
-            });
-          } else if (res.result === '140022011') {
-            const jumpUrl = res.loginErrorInfo?.jumpUrl || '';
-            const newDevicePullQrCodeSig = res.loginErrorInfo?.newDevicePullQrCodeSig || '';
-            logger.log('异常设备需要验证, jumpUrl: ', jumpUrl);
-            resolve({
-              result: false,
-              message: '异常设备需要验证',
-              needNewDevice: true,
-              jumpUrl,
-              newDevicePullQrCodeSig,
-            });
-          } else if (res.result !== '0') {
-            const errMsg = res.loginErrorInfo?.errMsg || '密码登录失败';
-            WebUiDataRuntime.setQQLoginError(errMsg);
-            requestLoginQRCode(loginService, logger);
-            resolve({ result: false, message: errMsg });
-          } else {
-            WebUiDataRuntime.setQQLoginStatus(true);
-            WebUiDataRuntime.setQQLoginError('');
-            resolve({ result: true, message: '' });
-          }
-        }).catch((e) => {
-          logger.logError(e);
-          WebUiDataRuntime.setQQLoginError('密码登录发生错误');
-          requestLoginQRCode(loginService, logger);
-          resolve({ result: false, message: '密码登录发生错误' });
-        });
-      } else {
-        resolve({ result: false, message: '密码登录失败：参数不完整' });
-      }
-    });
-  });
-  const tryPasswordFallbackLogin = async (uin: string): Promise<{ success: boolean, attempted: boolean; }> => {
-    if (WebUiDataRuntime.getQQSessionExpiredReason()) return { success: false, attempted: false };
-    const quickPasswordMd5 = resolveQuickPasswordMd5();
-    if (!quickPasswordMd5) {
-      logger.log(`QQ ${uin} 未配置回退密码环境变量，建议优先使用 ACCOUNT + NAPCAT_QUICK_PASSWORD（NAPCAT_QUICK_PASSWORD_MD5 作为备用），将使用二维码登录方式`);
-      return { success: false, attempted: false };
-    }
-
-    logger.log('正在尝试密码回退登录 ', uin);
-    const fallbackResult = await WebUiDataRuntime.requestPasswordLogin(uin, quickPasswordMd5);
-    if (fallbackResult.result) {
-      logger.log('密码回退登录成功 ', uin);
-      return { success: true, attempted: true };
-    }
-    if (fallbackResult.needCaptcha) {
-      const captchaTip = fallbackResult.proofWaterUrl
-        ? `密码回退需要验证码，请在 WebUi 中继续完成验证：${fallbackResult.proofWaterUrl}`
-        : '密码回退需要验证码，请在 WebUi 中继续完成验证';
-      logger.logWarn(captchaTip);
-      WebUiDataRuntime.setQQLoginError('密码回退需要验证码，请在 WebUi 中继续完成验证');
-      return { success: false, attempted: true };
-    }
-    if (fallbackResult.needNewDevice) {
-      const newDeviceTip = fallbackResult.jumpUrl
-        ? `密码回退需要新设备验证，请在 WebUi 中继续完成验证：${fallbackResult.jumpUrl}`
-        : '密码回退需要新设备验证，请在 WebUi 中继续完成验证';
-      logger.logWarn(newDeviceTip);
-      WebUiDataRuntime.setQQLoginError('密码回退需要新设备验证，请在 WebUi 中继续完成验证');
-      return { success: false, attempted: true };
-    }
-    logger.logError('密码回退登录失败：', fallbackResult.message);
-    return { success: false, attempted: true };
-  };
-
-  // 注册验证码登录回调（密码登录需要验证码时的第二步）
-  WebUiDataRuntime.setCaptchaLoginCall(async (uin: string, passwordMd5: string, ticket: string, randstr: string, sid: string) => {
-    return await new Promise((resolve) => {
-      if (uin && passwordMd5 && ticket) {
-        logger.log('正在验证码登录 ', uin);
-        loginService.passwordLogin({
-          uin,
-          passwordMd5,
-          step: 1,
-          newDeviceLoginSig: new Uint8Array(),
-          proofWaterSig: new TextEncoder().encode(ticket),
-          proofWaterRand: new TextEncoder().encode(randstr),
-          proofWaterSid: new TextEncoder().encode(sid),
-          unusualDeviceCheckSig: new Uint8Array(),
-        }).then(res => {
-          console.log('验证码登录结果: ', res);
-          if (res.result === '140022010') {
-            const jumpUrl = res.loginErrorInfo?.jumpUrl || '';
-            const newDevicePullQrCodeSig = res.loginErrorInfo?.newDevicePullQrCodeSig || '';
-            logger.log('验证码登录后需要新设备验证, jumpUrl: ', jumpUrl);
-            resolve({
-              result: false,
-              message: '新设备需要扫码验证',
-              needNewDevice: true,
-              jumpUrl,
-              newDevicePullQrCodeSig,
-            });
-          } else if (res.result === '140022011') {
-            const jumpUrl = res.loginErrorInfo?.jumpUrl || '';
-            const newDevicePullQrCodeSig = res.loginErrorInfo?.newDevicePullQrCodeSig || '';
-            logger.log('验证码登录后需要异常设备验证, jumpUrl: ', jumpUrl);
-            resolve({
-              result: false,
-              message: '异常设备需要验证',
-              needNewDevice: true,
-              jumpUrl,
-              newDevicePullQrCodeSig,
-            });
-          } else if (res.result !== '0') {
-            const errMsg = res.loginErrorInfo?.errMsg || '验证码登录失败';
-            WebUiDataRuntime.setQQLoginError(errMsg);
-            requestLoginQRCode(loginService, logger);
-            resolve({ result: false, message: errMsg });
-          } else {
-            WebUiDataRuntime.setQQLoginStatus(true);
-            WebUiDataRuntime.setQQLoginError('');
-            resolve({ result: true, message: '' });
-          }
-        }).catch((e) => {
-          logger.logError(e);
-          WebUiDataRuntime.setQQLoginError('验证码登录发生错误');
-          requestLoginQRCode(loginService, logger);
-          resolve({ result: false, message: '验证码登录发生错误' });
-        });
-      } else {
-        resolve({ result: false, message: '验证码登录失败：参数不完整' });
-      }
-    });
-  });
-
-  // 注册新设备登录回调（密码登录需要新设备验证时的第二步）
-  WebUiDataRuntime.setNewDeviceLoginCall(async (uin: string, passwordMd5: string, newDevicePullQrCodeSig: string) => {
-    return await new Promise((resolve) => {
-      if (uin && passwordMd5 && newDevicePullQrCodeSig) {
-        logger.log('正在新设备验证登录 ', uin);
-        loginService.passwordLogin({
-          uin,
-          passwordMd5,
-          step: 2,
-          newDeviceLoginSig: new TextEncoder().encode(newDevicePullQrCodeSig),
-          proofWaterSig: new Uint8Array(),
-          proofWaterRand: new Uint8Array(),
-          proofWaterSid: new Uint8Array(),
-          unusualDeviceCheckSig: new Uint8Array(),
-        }).then(res => {
-          if (res.result === '140022011') {
-            const jumpUrl = res.loginErrorInfo?.jumpUrl || '';
-            const newDevicePullQrCodeSig = res.loginErrorInfo?.newDevicePullQrCodeSig || '';
-            logger.log('新设备验证后需要异常设备验证, jumpUrl: ', jumpUrl);
-            resolve({
-              result: false,
-              message: '异常设备需要验证',
-              needNewDevice: true,
-              jumpUrl,
-              newDevicePullQrCodeSig,
-            });
-          } else if (res.result !== '0') {
-            const errMsg = res.loginErrorInfo?.errMsg || '新设备验证登录失败';
-            WebUiDataRuntime.setQQLoginError(errMsg);
-            requestLoginQRCode(loginService, logger);
-            resolve({ result: false, message: errMsg });
-          } else {
-            WebUiDataRuntime.setQQLoginStatus(true);
-            WebUiDataRuntime.setQQLoginError('');
-            resolve({ result: true, message: '' });
-          }
-        }).catch((e) => {
-          logger.logError(e);
-          WebUiDataRuntime.setQQLoginError('新设备验证登录发生错误');
-          requestLoginQRCode(loginService, logger);
-          resolve({ result: false, message: '新设备验证登录发生错误' });
-        });
-      } else {
-        resolve({ result: false, message: '新设备验证登录失败：参数不完整' });
-      }
-    });
-  });
-  if (WebUiDataRuntime.isQQAccountSwitching()) {
-    requestLoginQRCode(loginService, logger);
-  } else if (WebUiDataRuntime.getQQSessionExpiredReason() && process.env['NAPCAT_RECOVERY_QUICK_LOGIN'] !== '1') {
-    requestLoginQRCode(loginService, logger);
-  } else if (quickLoginUin) {
-    const savedAccount = historyLoginList.find(u => u.uin === quickLoginUin);
-    logger.log('[Core] [Login] 快速登录凭据状态', {
-      uin: quickLoginUin,
-      found: !!savedAccount,
-      isQuickLogin: savedAccount?.isQuickLogin,
-      isAutoLogin: savedAccount?.isAutoLogin,
-    });
-    if (savedAccount) {
-      logger.log('正在快速登录 ', quickLoginUin);
-      const outcome = await quickLogin.start(quickLoginUin);
-      if (!outcome.result && !outcome.needPhoneConfirm && !outcome.cancelled && !context.isLogined) {
-        WebUiDataRuntime.setQQLoginError(outcome.message);
-        const { success, attempted } = await tryPasswordFallbackLogin(quickLoginUin);
-        if (!success && !attempted && !context.isLogined) requestLoginQRCode(loginService, logger);
-      }
-    } else {
-      logger.logError('快速登录失败，未找到该 QQ 历史登录记录，将尝试密码回退登录');
-      const { success, attempted } = await tryPasswordFallbackLogin(quickLoginUin);
-      if (!success && !attempted && !context.isLogined) requestLoginQRCode(loginService, logger);
-    }
-  } else {
-    logger.log('没有 -q 指令指定快速登录，将使用二维码登录方式');
-    if (historyLoginList.length > 0) {
-      logger.log(`可用于快速登录 of QQ：\n${historyLoginList
-        .map((u, index) => `${index + 1}. ${u.uin} ${u.nickName}`)
-        .join('\n')
-        }`);
-    }
-    let hasAttemptedFallback = false;
-    try {
-      // 检查是否配置了自动登录账号，并尝试 WebUi 快速/密码回退登录。
-      // 这可以避免在已经有自动登录配置的情况下过早输出二维码。
-      const quickLoginList = WebUiDataRuntime.getQQQuickLoginList() || [];
-      const hasAutoLogin = process.env['NAPCAT_QUICK_ACCOUNT'] || WebUiConfig?.getAutoLoginAccount() || (quickLoginList.length > 0); // 假如有历史登录列表
-      if (hasAutoLogin || process.env['NAPCAT_QUICK_PASSWORD'] || process.env['NAPCAT_QUICK_PASSWORD_MD5']) {
-        hasAttemptedFallback = true;
-      }
-      await WebUiDataRuntime.runWebUiConfigQuickFunction();
-    } catch (error) {
-      logger.logError('WebUi 快速登录失败 执行失败', error);
-    }
-    if (!hasAttemptedFallback && !context.isLogined && !quickLogin.isWaiting()) {
-      requestLoginQRCode(loginService, logger);
-    }
-  }
-
-  loginService.getLoginList().then((res) => {
-    // 遍历 res.LocalLoginInfoList[x].isQuickLogin是否可以 res.LocalLoginInfoList[x].uin 转为string 加入string[] 最后遍历完成调用WebUiDataRuntime.setQQQuickLoginList
-    const list = res.LocalLoginInfoList.filter((item) => item.isQuickLogin);
-    WebUiDataRuntime.setQQQuickLoginList(list.map((item) => item.uin.toString()));
-    WebUiDataRuntime.setQQNewLoginList(list);
-  });
 }
 
 async function initializeSession (
@@ -925,23 +558,12 @@ export async function NCoreInitShell () {
   await runStartupStep(logger, 'initializeLoginService', () => initializeLoginService(loginService, basicInfoWrapper, dataPathGlobal, systemVersion, hostname, logger));
   await runStartupStep(logger, 'handleProxy', () => handleProxy(session, logger));
 
-  let quickLoginUin: string | undefined;
-  try {
-    const args = process.argv;
-    const qIndex = args.findIndex(arg => arg === '-q' || arg === '--qq');
-    if (qIndex !== -1 && qIndex + 1 < args.length) {
-      quickLoginUin = args[qIndex + 1];
-    }
-  } catch (error) {
-    logger.logWarn('解析命令行参数失败，无法使用快速登录功能', error);
-  }
-
   const historyLoginList = (await runStartupStep(logger, 'getLoginList', () => loginService.getLoginList())).LocalLoginInfoList;
 
   const dataTimestape = new Date().getTime().toString();
   o3Service.reportAmgomWeather('login', 'a1', [dataTimestape, '0', '0']);
 
-  const selfInfo = await login.start(quickLoginUin, historyLoginList);
+  const selfInfo = await login.start(historyLoginList);
 
   const amgomDataPiece = 'eb1fd6ac257461580dc7438eb099f23aae04ca679f4d88f53072dc56e3bb1129';
   o3Service.setAmgomDataPiece(basicInfoWrapper.QQVersionAppid, new Uint8Array(Buffer.from(amgomDataPiece, 'hex')));
@@ -1049,7 +671,6 @@ export class NapCatShell {
         loginPhase: WebUiDataRuntime.getQQLoginPhase(),
       }),
       onOffline: (tips) => {
-        if (WebUiDataRuntime.isQQAccountSwitching()) return;
         if (this.core.sessionExpiredReason) WebUiDataRuntime.setQQSessionExpiredReason(this.core.sessionExpiredReason);
         WebUiDataRuntime.setQQLoginStatus(false);
         // 下线后的二维码已失效，绝不能继续交给页面展示或扫码。
@@ -1058,13 +679,12 @@ export class NapCatShell {
         WebUiDataRuntime.setQQLoginPhase('reconnecting');
       },
       onRecovered: () => {
-        if (WebUiDataRuntime.isQQAccountSwitching()) return;
+        WebUiDataRuntime.setAccountReason(undefined, '');
         WebUiDataRuntime.setQQLoginStatus(true);
         WebUiDataRuntime.setQQLoginError('');
         WebUiDataRuntime.setQQLoginPhase('ready');
       },
       restart: async (tips) => {
-        if (WebUiDataRuntime.isQQAccountSwitching()) return true;
         try {
           const restartResult = await WebUiDataRuntime.requestRestartProcess({ sessionExpiredReason: this.core.sessionExpiredReason });
           this.context.logger.logWarn('[Core] [Login] 账号已离线，正在重启 Worker 以重新创建 QQ 登录服务', restartResult);
@@ -1078,9 +698,21 @@ export class NapCatShell {
         return false;
       },
     });
-    this.core.event.on('KickedOffLine', (tips: string) => handleOffline(tips, false));
-    this.core.event.on('SelfOffline', (tips: string) => handleOffline(tips, true));
-    this.core.event.on('SessionExpired', (tips: string) => handleOffline(tips, false));
+    this.core.event.on('KickedOffLine', (tips: string) => {
+      WebUiDataRuntime.setAccountReason('kicked', tips);
+      WebUiDataRuntime.setLoginAttempt(undefined);
+      handleOffline(tips, false);
+    });
+    this.core.event.on('SelfOffline', (tips: string) => {
+      WebUiDataRuntime.setAccountReason('self_offline', tips);
+      WebUiDataRuntime.setLoginAttempt(undefined);
+      handleOffline(tips, true);
+    });
+    this.core.event.on('SessionExpired', (tips: string) => {
+      WebUiDataRuntime.setAccountReason('session_expired', tips);
+      WebUiDataRuntime.setLoginAttempt(undefined);
+      handleOffline(tips, false);
+    });
     // 使用 NapCatAdapterManager 统一管理协议适配器
     const adapterManager = new NapCatAdapterManager(this.core, this.context, this.context.pathWrapper);
     await adapterManager.initAdapters()

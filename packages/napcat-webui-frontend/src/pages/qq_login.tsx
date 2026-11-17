@@ -1,509 +1,105 @@
 import { Button } from '@heroui/button';
 import { CardBody, CardHeader } from '@heroui/card';
-import { Image } from '@heroui/image';
-import { Tab, Tabs } from '@heroui/tabs';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'react-hot-toast';
-import { useLocation, useNavigate } from 'react-router-dom';
-import CryptoJS from 'crypto-js';
+import { useNavigate } from 'react-router-dom';
+import { QRCodeSVG } from 'qrcode.react';
 import { signOut } from '@/utils/auth';
-import { MdSettings } from 'react-icons/md';
-
-import logo from '@/assets/images/logo.png';
 import GUIDManager from '@/components/guid_manager';
 import Modal from '@/components/modal';
-
 import HoverEffectCard from '@/components/effect_card';
-import { title } from '@/components/primitives';
-import PasswordLogin from '@/components/password_login';
-import QrCodeLogin from '@/components/qr_code_login';
-import QuickLogin from '@/components/quick_login';
-import SwitchQQAccount from '@/components/switch_qq_account';
 import { ThemeSwitch } from '@/components/theme-switch';
-import type { CaptchaCallbackData } from '@/components/tencent_captcha';
-
+import TencentCaptchaModal, { type CaptchaCallbackData } from '@/components/tencent_captcha';
+import NewDeviceVerify from '@/components/new_device_verify';
 import QQManager from '@/controllers/qq_manager';
-import useDialog from '@/hooks/use-dialog';
 import PureLayout from '@/layouts/pure';
-import { motion } from 'motion/react';
 
-const parseLoginError = (errorStr: string) => {
-  if (errorStr.startsWith('登录失败: ')) {
-    const jsonPart = errorStr.substring('登录失败: '.length);
-
-    try {
-      const parsed = JSON.parse(jsonPart);
-
-      if (Array.isArray(parsed) && parsed[1]) {
-        const info = parsed[1];
-        const codeStr = info.serverErrorCode ? ` (错误码: ${info.serverErrorCode})` : '';
-
-        return `${info.message || errorStr}${codeStr}`;
-      }
-    } catch (_e) {
-      // 忽略解析错误
-    }
-  }
-
-  return errorStr;
+type Status = Awaited<ReturnType<typeof QQManager.checkQQLoginStatusWithQrcode>>;
+const phaseText: Record<string, string> = {
+  logging_in: '正在登录，等待 QQ 确认…',
+  waiting_phone_confirm: '请在手机 QQ 上确认登录',
+  waiting_qrcode: '请用配置中的 QQ 账号扫描二维码',
+  generating_qrcode: '正在获取二维码…',
+  qrcode_scanned: '二维码已扫描，请在手机上确认',
+  captcha_required: '密码登录需要完成验证码',
+  device_verification: '密码登录需要完成设备验证',
+  initializing: 'QQ 已登录，正在启动服务…',
+  ready: 'QQ 已在线',
+  offline: 'QQ 当前离线',
+  reconnecting: '正在连接 QQ 登录服务…',
+  qrcode_failed: '本次扫码未完成，请重新扫码',
 };
 
 export default function QQLoginPage () {
   const navigate = useNavigate();
-  const location = useLocation();
-  const switchingFromDashboard = location.state?.accountSwitching === true;
-  const dialog = useDialog();
-  const [uinValue, setUinValue] = useState<string>('');
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [qrcode, setQrcode] = useState<string>('');
-  const [accountSwitching, setAccountSwitching] = useState(switchingFromDashboard);
-  const [canSwitchAccount, setCanSwitchAccount] = useState(false);
-  const [loginPhase, setLoginPhase] = useState<string>(switchingFromDashboard ? 'reconnecting' : 'waiting_qrcode');
-  const [isRecoveringLoginService, setIsRecoveringLoginService] = useState(switchingFromDashboard);
-  const qrcodeRef = useRef<string>('');
-  const qrcodeRequestVersionRef = useRef(0);
-  const isRefreshingQRCodeRef = useRef(false);
-  const [loginError, setLoginError] = useState<string>('');
-  const lastErrorRef = useRef<string>('');
-  const [qqList, setQQList] = useState<LoginListItem[]>([]);
-  const [refresh, setRefresh] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>(switchingFromDashboard ? 'qrcode' : 'shortcut');
-  const initialTabChosenRef = useRef(switchingFromDashboard);
-  const selectLoginTab = (tab: string) => {
-    initialTabChosenRef.current = true;
-    setActiveTab(tab);
-  };
-  const firstLoad = useRef<boolean>(true);
-  const [captchaState, setCaptchaState] = useState<{
-    needCaptcha: boolean;
-    proofWaterUrl: string;
-    uin: string;
-    password: string;
-  } | null>(null);
-  const [captchaVerifying, setCaptchaVerifying] = useState(false);
-  const [newDeviceState, setNewDeviceState] = useState<{
-    needNewDevice: boolean;
-    jumpUrl: string;
-    newDevicePullQrCodeSig: string;
-    uin: string;
-    password: string;
-  } | null>(null);
-  // newDevicePullQrCodeSig is kept for step:2 login after QR verification
-  const onSubmit = async () => {
-    if (!uinValue) {
-      toast.error('请选择快捷登录的QQ');
-
-      return;
-    }
-    setIsLoading(true);
-    try {
-      await QQManager.setQuickLogin(uinValue);
-    } catch (error) {
-      const msg = (error as Error).message;
-
-      toast.error(`快速登录QQ失败: ${msg}`);
-    } finally {
-      setTimeout(() => {
-        setIsLoading(false);
-      }, 1000);
-    }
-  };
-
-  const onPasswordSubmit = async (uin: string, password: string) => {
-    setIsLoading(true);
-    try {
-      // 计算密码的MD5值
-      const passwordMd5 = CryptoJS.MD5(password).toString();
-      const result = await QQManager.passwordLogin(uin, passwordMd5);
-      if (result?.needCaptcha && result.proofWaterUrl) {
-        // 需要验证码，显示验证码组件
-        setCaptchaState({
-          needCaptcha: true,
-          proofWaterUrl: result.proofWaterUrl,
-          uin,
-          password,
-        });
-        toast('需要安全验证，请完成验证码', { icon: '🔒' });
-      } else if (result?.needNewDevice && result.jumpUrl) {
-        setNewDeviceState({
-          needNewDevice: true,
-          jumpUrl: result.jumpUrl,
-          newDevicePullQrCodeSig: result.newDevicePullQrCodeSig || '',
-          uin,
-          password,
-        });
-        toast('检测到新设备，请扫码验证', { icon: '📱' });
-      } else {
-        toast.success('密码登录请求已发送');
-      }
-    } catch (error) {
-      const msg = (error as Error).message;
-      toast.error(`密码登录失败: ${msg}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const onCaptchaSubmit = async (uin: string, password: string, captchaData: CaptchaCallbackData) => {
-    setIsLoading(true);
-    setCaptchaVerifying(true);
-    try {
-      const passwordMd5 = CryptoJS.MD5(password).toString();
-      const result = await QQManager.captchaLogin(uin, passwordMd5, captchaData.ticket, captchaData.randstr, captchaData.sid);
-      if (result?.needNewDevice && result.jumpUrl) {
-        setCaptchaState(null);
-        setNewDeviceState({
-          needNewDevice: true,
-          jumpUrl: result.jumpUrl,
-          newDevicePullQrCodeSig: result.newDevicePullQrCodeSig || '',
-          uin,
-          password,
-        });
-        toast('检测到异常设备，请扫码验证', { icon: '📱' });
-      } else {
-        toast.success('验证码登录请求已发送');
-        setCaptchaState(null);
-      }
-    } catch (error) {
-      const msg = (error as Error).message;
-      toast.error(`验证码登录失败: ${msg}`);
-      setCaptchaState(null);
-    } finally {
-      setIsLoading(false);
-      setCaptchaVerifying(false);
-    }
-  };
-
-  const onCaptchaCancel = () => {
-    setCaptchaState(null);
-  };
-
-  const onNewDeviceVerified = async (token: string) => {
-    if (!newDeviceState) return;
-    setIsLoading(true);
-    try {
-      const passwordMd5 = CryptoJS.MD5(newDeviceState.password).toString();
-      // Use the str_nt_succ_token from QR verification as newDevicePullQrCodeSig for step:2
-      const sig = token || newDeviceState.newDevicePullQrCodeSig;
-      const result = await QQManager.newDeviceLogin(newDeviceState.uin, passwordMd5, sig);
-      if (result?.needNewDevice && result.jumpUrl) {
-        // 新设备验证后又触发了异常设备验证，更新 jumpUrl
-        setNewDeviceState({
-          needNewDevice: true,
-          jumpUrl: result.jumpUrl,
-          newDevicePullQrCodeSig: result.newDevicePullQrCodeSig || '',
-          uin: newDeviceState.uin,
-          password: newDeviceState.password,
-        });
-        toast('检测到异常设备，请继续扫码验证', { icon: '📱' });
-      } else {
-        toast.success('新设备验证登录请求已发送');
-        setNewDeviceState(null);
-      }
-    } catch (error) {
-      const msg = (error as Error).message;
-      toast.error(`新设备验证登录失败: ${msg}`);
-      setNewDeviceState(null);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const onNewDeviceCancel = () => {
-    setNewDeviceState(null);
-  };
-
-  const onUpdateQrCode = async () => {
-    const requestVersion = qrcodeRequestVersionRef.current;
-    if (firstLoad.current) setIsLoading(true);
-    try {
-      const data = await QQManager.checkQQLoginStatusWithQrcode();
-      setAccountSwitching(!!data.accountSwitching);
-      setCanSwitchAccount(!!data.canSwitchAccount);
-      // Choose a default once. Persistent status flags and QR refreshes must
-      // never override the login method the user has selected.
-      if (!initialTabChosenRef.current) {
-        initialTabChosenRef.current = true;
-        if (data.accountSwitching || data.sessionExpired || data.loginPhase === 'qrcode_failed') {
-          setActiveTab('qrcode');
-        }
-      }
-      setLoginPhase(data.loginPhase || (data.isLogin ? 'ready' : 'waiting_qrcode'));
-      if (data.loginPhase === 'reconnecting') {
-        setIsRecoveringLoginService(true);
-      }
-
-      if (data.isLogin) {
-        toast.success('QQ登录成功');
-        navigate('/', { replace: true });
-      } else {
-        // 刷新二维码是一个需要等待结果的操作。忽略在它开始前发出的
-        // 轮询响应，避免旧 URL 在刷新完成后覆盖刚拿到的新二维码。
-        if (requestVersion === qrcodeRequestVersionRef.current && !isRefreshingQRCodeRef.current) {
-          qrcodeRef.current = data.qrcodeurl;
-          setQrcode(data.qrcodeurl);
-          if (data.qrcodeurl) {
-            setIsRecoveringLoginService(false);
-          }
-        }
-        if (data.loginError && data.loginError !== lastErrorRef.current) {
-          lastErrorRef.current = data.loginError;
-          setLoginError(data.loginError);
-          const friendlyMsg = parseLoginError(data.loginError);
-
-          // 被踢下线时页面会自动进入登录服务恢复流程。它不是可由用户
-          // 处理的登录表单错误，也不应弹出对话框遮住恢复状态。
-          const isRecovering = data.loginPhase === 'reconnecting' || isRecoveringLoginService;
-          const isQrCodeExpired = friendlyMsg.includes('二维码') && (friendlyMsg.includes('过期') || friendlyMsg.includes('失效'));
-
-          const isInlineFailure = data.accountSwitching || data.sessionExpired || data.loginPhase === 'qrcode_failed';
-          if (!isRecovering && !isInlineFailure && (!isQrCodeExpired || activeTab === 'qrcode')) {
-            dialog.alert({
-              title: '登录失败',
-              content: friendlyMsg,
-              confirmText: '确定',
-            });
-          }
-        } else if (!data.loginError) {
-          lastErrorRef.current = '';
-          setLoginError('');
-        }
-      }
-    } catch (error) {
-      const msg = (error as Error).message;
-      // Worker 重启时，旧连接被关闭是预期现象。恢复状态持续轮询即可，
-      // 不要把 ERR_EMPTY_RESPONSE 作为用户可操作的错误反复弹出。
-      if (!isRecoveringLoginService) {
-        toast.error(`获取二维码失败: ${msg}`);
-      }
-    } finally {
-      if (firstLoad.current) {
-        setIsLoading(false);
-        firstLoad.current = false;
-      }
-    }
-  };
-
-  const onUpdateQQList = async () => {
-    setRefresh(true);
-    try {
-      const data = await QQManager.getQQQuickLoginListNew();
-      setQQList(data);
-    } catch (error) {
-      const msg = (error as Error).message;
-      toast.error(`获取QQ列表失败: ${msg}`);
-    } finally {
-      setRefresh(false);
-    }
-  };
-
-  const handleSelectionChange: React.ChangeEventHandler<HTMLSelectElement> = (
-    e
-  ) => {
-    setUinValue(e.target.value);
-  };
-
-  const onRefreshQRCode = async () => {
-    if (isRecoveringLoginService || loginPhase === 'reconnecting') {
-      toast('QQ 登录服务正在恢复，请等待新的二维码…', { icon: '⏳' });
-      return;
-    }
-    if (isRefreshingQRCodeRef.current) {
-      return;
-    }
-    qrcodeRequestVersionRef.current += 1;
-    isRefreshingQRCodeRef.current = true;
-    setIsRefreshingQRCode(true);
-    try {
-      lastErrorRef.current = '';
-      setLoginError('');
-      const { qrcodeurl, restarting } = await QQManager.refreshQRCode();
-      if (restarting) {
-        setIsRecoveringLoginService(true);
-        setLoginPhase('reconnecting');
-        return;
-      }
-      if (!qrcodeurl || qrcodeurl === qrcodeRef.current) {
-        throw new Error('未获取到新的二维码');
-      }
-      qrcodeRef.current = qrcodeurl;
-      setQrcode(qrcodeurl);
-      toast.success('二维码已刷新');
-    } catch (error) {
-      const msg = (error as Error).message;
-      if (msg.includes('QQ_LOGIN_SERVICE_RESTARTING')) {
-        setIsRecoveringLoginService(true);
-        setLoginPhase('reconnecting');
-        toast('QQ 登录服务正在重启，正在生成新的二维码…', { icon: '⏳' });
-      } else if (msg.includes('二维码刷新超时')) {
-        toast.error('未能取得新的二维码，请稍后重试');
-      } else {
-        toast.error(`刷新二维码失败: ${msg}`);
-      }
-    } finally {
-      qrcodeRequestVersionRef.current += 1;
-      isRefreshingQRCodeRef.current = false;
-      setIsRefreshingQRCode(false);
-    }
-  };
-
+  const [status, setStatus] = useState<Status>();
+  const [busy, setBusy] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   const [showGUIDManager, setShowGUIDManager] = useState(false);
-  const [isRefreshingQRCode, setIsRefreshingQRCode] = useState(false);
-
+  const [showCaptcha, setShowCaptcha] = useState(false);
+  const attemptId = status?.attempt?.id;
+  const refresh = useCallback(async () => {
+    const next = await QQManager.checkQQLoginStatusWithQrcode();
+    setStatus(next);
+    setUnavailable(false);
+    if (next.isLogin) navigate('/', { replace: true });
+  }, [navigate]);
   useEffect(() => {
-    const isLoginTransitioning = loginPhase === 'qrcode_scanned' || loginPhase === 'initializing' || loginPhase === 'reconnecting' || isRecoveringLoginService;
-    const pollInterval = isRefreshingQRCode || isLoginTransitioning ? 500 : 3000;
-    const timer = setInterval(() => {
-      onUpdateQrCode();
-    }, pollInterval);
-
-    onUpdateQrCode();
-
-    return () => clearInterval(timer);
-  }, [isRefreshingQRCode, loginPhase, isRecoveringLoginService]);
-
-  useEffect(() => {
-    // The old Worker may already be gone when we arrive from the logout action.
-    // Fetch saved accounts after the replacement login service is available.
-    if (!isRecoveringLoginService) onUpdateQQList();
-  }, [isRecoveringLoginService]);
-
-  useEffect(() => {
-    if (!isRecoveringLoginService) return;
-    const timer = setTimeout(() => {
-      setIsRecoveringLoginService(false);
-      setLoginPhase('offline');
-      setLoginError('QQ 登录服务恢复超时，请稍后重试');
-    }, 180_000);
-    return () => clearTimeout(timer);
-  }, [isRecoveringLoginService]);
-
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { await refresh(); } catch { if (!stopped) setUnavailable(true); }
+      if (!stopped) timer = setTimeout(poll, 1500);
+    };
+    poll();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [refresh]);
+  useEffect(() => { setShowCaptcha(status?.loginPhase === 'captcha_required'); }, [attemptId, status?.loginPhase]);
+  const run = useCallback(async (action: () => Promise<void>) => {
+    setBusy(true);
+    try { await action(); await refresh(); } catch (error) { toast.error((error as Error).message); } finally { setBusy(false); }
+  }, [refresh]);
+  const captchaSuccess = useCallback((data: CaptchaCallbackData) => {
+    setShowCaptcha(false);
+    if (attemptId) run(() => QQManager.captchaLogin(attemptId, data.ticket, data.randstr, data.sid));
+  }, [attemptId, run]);
+  const deviceSuccess = useCallback((token: string) => {
+    if (attemptId) run(() => QQManager.newDeviceLogin(attemptId, token));
+  }, [attemptId, run]);
+  const captchaCancel = useCallback(() => setShowCaptcha(false), []);
   return (
-    <>
-      <title>QQ登录 - NapCat WebUI</title>
-      <PureLayout>
-        <motion.div
-          initial={{ opacity: 0, y: 20, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.5, type: 'spring', stiffness: 120, damping: 20 }}
-          className='w-[608px] max-w-full py-8 px-2 md:px-8 overflow-hidden'
-        >
-          <HoverEffectCard
-            className='items-center gap-4 pt-0 pb-6 bg-default-50'
-            maxXRotation={3}
-            maxYRotation={3}
-          >
-            <CardHeader className='inline-block max-w-lg text-center justify-center'>
-              <div className='flex items-center justify-center w-full gap-2 pt-10'>
-                <Image alt='logo' height='7em' src={logo} />
-                <div>
-                  <span className={title()}>Web&nbsp;</span>
-                  <span className={title({ color: 'violet' })}>
-                    Login&nbsp;
-                  </span>
-                </div>
-              </div>
-              <div className='absolute right-4 top-4 flex items-center gap-2'>
-                <Button isIconOnly variant='light' aria-label='Settings' onPress={() => setShowGUIDManager(true)}>
-                  <MdSettings size={22} />
-                </Button>
-                <ThemeSwitch />
-              </div>
-            </CardHeader>
-
-            <CardBody className='flex gap-5 p-10 pt-0'>
-              {accountSwitching && loginPhase === 'logging_out' && (
-                <div role='status' className='text-center'>正在退出 QQ…</div>
-              )}
-              {accountSwitching && loginPhase === 'offline' && (
-                <div role='status' className='text-center space-y-3'>
-                  <div>{loginError || 'QQ 账号切换未完成，请重试'}</div>
-                  {canSwitchAccount && <SwitchQQAccount retry />}
-                </div>
-              )}
-              {loginPhase === 'waiting_phone_confirm' && (
-                <div role='status' className='rounded-lg bg-primary-50 px-4 py-4 text-center space-y-3'>
-                  <div className='font-medium'>请在手机 QQ 上确认登录</div>
-                  <div className='text-sm text-default-600'>
-                    可勾选“下次登录无需手机验证”。确认后将自动继续登录，最多等待 3 分钟。
-                  </div>
-                  <Button
-                    size='sm' variant='flat' isLoading={isRefreshingQRCode} onPress={() => {
-                      selectLoginTab('qrcode');
-                      onRefreshQRCode();
-                    }}
-                  >
-                    改用二维码登录
-                  </Button>
-                </div>
-              )}
-              <Tabs
-                fullWidth
-                classNames={{
-                  tabList: 'shadow-sm dark:shadow-none',
-                }}
-                isDisabled={isLoading || (accountSwitching && ['logging_out', 'offline'].includes(loginPhase))}
-                size='lg'
-                selectedKey={activeTab}
-                onSelectionChange={(key) => key !== null && selectLoginTab(key.toString())}
-              >
-                <Tab key='shortcut' title='快速登录'>
-                  <QuickLogin
-                    handleSelectionChange={handleSelectionChange}
-                    isLoading={isLoading || loginPhase === 'waiting_phone_confirm'}
-                    qqList={qqList}
-                    refresh={refresh}
-                    selectedQQ={uinValue}
-                    onSubmit={onSubmit}
-                    onUpdateQQList={onUpdateQQList}
-                  />
-                </Tab>
-                <Tab key='password' title='密码登录'>
-                  <PasswordLogin
-                    isLoading={isLoading || loginPhase === 'waiting_phone_confirm'}
-                    onSubmit={onPasswordSubmit}
-                    onCaptchaSubmit={onCaptchaSubmit}
-                    onNewDeviceVerified={onNewDeviceVerified}
-                    qqList={qqList}
-                    captchaState={captchaState}
-                    captchaVerifying={captchaVerifying}
-                    newDeviceState={newDeviceState}
-                    onCaptchaCancel={onCaptchaCancel}
-                    onNewDeviceCancel={onNewDeviceCancel}
-                  />
-                </Tab>
-                <Tab key='qrcode' title='扫码登录'>
-                  <QrCodeLogin
-                    loginError={parseLoginError(loginError)}
-                    qrcode={qrcode}
-                    onRefresh={onRefreshQRCode}
-                    isRefreshing={isRefreshingQRCode}
-                    loginPhase={loginPhase}
-                    isRecoveringLoginService={isRecoveringLoginService}
-                  />
-                </Tab>
-              </Tabs>
-              <Button
-                className='w-fit mx-auto'
-                variant='light'
-                color='primary'
-                onPress={signOut}
-              >
-                退出 WebUI
-              </Button>
-            </CardBody>
-          </HoverEffectCard>
-        </motion.div>
-      </PureLayout>
-      {showGUIDManager && (
-        <Modal
-          title='设备 GUID 管理'
-          content={<GUIDManager compact showRestart />}
-          size='lg'
-          hideFooter
-          onClose={() => setShowGUIDManager(false)}
-        />
-      )}
-    </>
+    <PureLayout>
+      <HoverEffectCard className='w-full max-w-lg mx-auto'>
+        <CardHeader className='flex justify-between'>
+          <h1 className='text-xl font-bold'>QQ 登录</h1>
+          <ThemeSwitch />
+        </CardHeader>
+        <CardBody className='flex flex-col items-center gap-5'>
+          <p>配置账号：<strong>{status?.account || '读取中…'}</strong></p>
+          <p className='text-default-600'>{unavailable ? '正在等待服务恢复…' : phaseText[status?.loginPhase || 'reconnecting']}</p>
+          {status?.loginError && <p className='text-warning text-sm whitespace-pre-wrap'>{status.loginError}</p>}
+          {status?.qrcodeurl && ['waiting_qrcode', 'qrcode_scanned'].includes(status.loginPhase || '') && (
+            <div className='bg-white p-3 rounded'><QRCodeSVG value={status.qrcodeurl} size={200} /></div>
+          )}
+          {status?.loginPhase === 'captcha_required' && status.attempt?.proofWaterUrl && (
+            <>
+              {showCaptcha && <TencentCaptchaModal proofWaterUrl={status.attempt.proofWaterUrl} onSuccess={captchaSuccess} onCancel={captchaCancel} />}
+              <Button onPress={() => setShowCaptcha(true)} isDisabled={busy}>打开验证码</Button>
+            </>
+          )}
+          {status?.loginPhase === 'device_verification' && status.attempt?.jumpUrl && (
+            <NewDeviceVerify key={attemptId} uin={status.account} jumpUrl={status.attempt.jumpUrl} onVerified={deviceSuccess} />
+          )}
+          <div className='flex gap-3'>
+            <Button color='primary' isLoading={busy} isDisabled={unavailable || busy} onPress={() => run(() => QQManager.login('auto'))}>登录配置账号</Button>
+            <Button isDisabled={unavailable || busy} onPress={() => run(() => QQManager.login('qr'))}>重新扫码</Button>
+          </div>
+          <p className='text-xs text-default-500'>登录账号及密码由配置文件管理；需要手机确认或验证码时，可在这里继续完成。</p>
+          <Button variant='light' onPress={() => setShowGUIDManager(true)}>设备 GUID 管理</Button>
+          <Button variant='light' onPress={signOut}>退出 WebUI</Button>
+        </CardBody>
+      </HoverEffectCard>
+      {showGUIDManager && <Modal title='设备 GUID 管理' content={<GUIDManager compact showRestart />} size='lg' hideFooter onClose={() => setShowGUIDManager(false)} />}
+    </PureLayout>
   );
 }

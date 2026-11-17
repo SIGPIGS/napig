@@ -1,494 +1,291 @@
 import { NCoreInitShell } from './base';
 import { NapCatPathWrapper } from '@/napcat-common/src/path';
+import { getNapigConfig, setNapigConfig, type NapigConfig } from '@/napcat-common/src/config';
 import { LogWrapper } from '@/napcat-core/helper/log';
 import { connectToNamedPipe } from './pipe';
-import { WebUiDataRuntime } from '@/napcat-webui-backend/src/helper/Data';
+import { WebUiDataRuntime, type AccountState } from '@/napcat-webui-backend/src/helper/Data';
 import { webUiRuntimePort } from '@/napcat-webui-backend/index';
 import { createSessionRecoveryBudget } from './session-recovery';
 import { getLoginDiagnostics } from '@/napcat-core/helper/login-diagnostics';
 import { createProcessManager, type IProcessManager, type IWorkerProcess } from './process-api';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
+import { createLoginRequests, type LoginMethod, type LoginResult, type ManagedStatus } from './management';
+import { startQQBotManagement } from './qqbot-management';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const envPath = path.join(__dirname, 'config', '.env');
-if (fs.existsSync(envPath)) {
-  try {
-    const data = fs.readFileSync(envPath, 'utf8');
-    data.split(/\r?\n/).forEach(line => {
-      line = line.trim();
-      if (line && !line.startsWith('#')) {
-        const parts = line.split('=');
-        const key = parts[0]?.trim();
-        const value = parts.slice(1).join('=').trim();
-        if (key && value) {
-          process.env[key] = value;
-        }
-      }
-    });
-  } catch (e) {
-    console.log('[NapCat] Failed to load .env file:', e);
-  }
-}
 const pathWrapper = new NapCatPathWrapper();
-
-// 环境变量配置
 const ENV = {
   isWorkerProcess: process.env['NAPCAT_WORKER_PROCESS'] === '1',
   isMultiProcessDisabled: process.env['NAPCAT_DISABLE_MULTI_PROCESS'] === '1' || process.env['NAPCAT_DISABLE_MULTIPROCESSING'] === '1',
   isPipeDisabled: process.env['NAPCAT_DISABLE_PIPE'] === '1',
-} as const;
-
-// Worker 消息类型
-interface WorkerMessage {
-  type: 'restart' | 'restart-prepare' | 'shutdown' | 'login-success' | 'account-switch-prepare' | 'account-switch-ready';
-  port?: number;
-  sessionExpiredReason?: string;
-  switchAccount?: boolean;
-}
-
+};
 const logger = new LogWrapper(pathWrapper.logsPath);
-if (!ENV.isWorkerProcess && !ENV.isMultiProcessDisabled) {
-  logger.setFileLogEnabled(false);
-}
+if (!ENV.isWorkerProcess && !ENV.isMultiProcessDisabled) logger.setFileLogEnabled(false);
 
-// 进程管理器和当前 Worker 进程引用
-let processManager: IProcessManager | null = null;
-let currentWorker: IWorkerProcess | null = null;
-let switchingWorker: IWorkerProcess | undefined;
+type WorkerMessage =
+  | { type: 'worker-started'; }
+  | { type: 'configure'; config: NapigConfig; }
+  | { type: 'restart'; port?: number; sessionExpiredReason?: string; loginMethod?: LoginMethod; }
+  | { type: 'restart-prepare' | 'shutdown' | 'login-success'; }
+  | { type: 'account-state'; state: AccountState; }
+  | { type: 'login'; id: number; method: LoginMethod; }
+  | { type: 'login-result'; id: number; result: LoginResult; };
+
+let processManager: IProcessManager;
+let currentWorker: IWorkerProcess | undefined;
 let isElectron = false;
 let isRestarting = false;
-let switchAccount = process.env['NAPCAT_SWITCH_ACCOUNT'] === '1';
+let isShuttingDown = false;
 let sessionExpiredReason = process.env['NAPCAT_SESSION_EXPIRED_REASON'] || '';
 let allowRecoveryQuickLogin = false;
 const requestAutomaticRecovery = createSessionRecoveryBudget();
-let isShuttingDown = false;
+const crashTimes: number[] = [];
+let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let management: ReturnType<typeof startQQBotManagement> | undefined;
+let status: ManagedStatus;
+const loginRequests = createLoginRequests((id, method) => {
+  if (!currentWorker) throw new Error('QQ Worker 尚未启动');
+  currentWorker.postMessage({ type: 'login', id, method } satisfies WorkerMessage);
+});
 
-// 进程崩溃保护：记录最近的异常退出时间戳
-const recentCrashTimestamps: number[] = [];
-const CRASH_TIME_WINDOW = 10000; // 10秒时间窗口
-const MAX_CRASHES_IN_WINDOW = 3; // 最大崩溃次数
-
-/**
- * 获取进程类型名称（用于日志）
- */
-function getProcessTypeName (): string {
-  return isElectron ? 'UtilityProcess' : 'Fork';
-}
-
-/**
- * 获取 Worker 脚本路径
- */
-function getWorkerScriptPath (): string {
-  return __filename.endsWith('.mjs')
-    ? path.join(__dirname, 'napcat.mjs')
-    : path.join(__dirname, 'napcat.js');
-}
-
-/**
- * 检查进程是否存在
- */
-function isProcessAlive (pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+function forceStopWorker (child: IWorkerProcess) {
+  // Native calls can block the Worker's event loop, including SIGTERM handlers.
+  if (child.pid) {
+    try { process.kill(child.pid, 'SIGKILL'); } catch (error) { logger.logWarn('[NapCat] 终止 Worker 失败:', error); }
   }
 }
 
-/**
- * 强制终止进程
- */
-function forceKillProcess (pid: number): void {
-  try {
-    process.kill(pid, 'SIGKILL');
-  } catch (error) {
-    // SIGKILL 失败，在 Windows 上使用 taskkill 兜底
-    if (process.platform === 'win32') {
-      try {
-        require('child_process').execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
-      } catch {
-        logger.logError(`[NapCat] [Process] 强制终止进程失败: PID ${pid}`);
-      }
-    } else {
-      logger.logError('[NapCat] [Process] 强制终止进程失败:', error);
-    }
-  }
+function scheduleRecovery () {
+  clearTimeout(recoveryTimer);
+  status.worker = 'cooldown';
+  logger.logError('[NapCat] Worker 连续启动失败，10 分钟后重试；官方机器人仍可用于手动恢复');
+  recoveryTimer = setTimeout(() => {
+    recoveryTimer = undefined;
+    crashTimes.length = 0;
+    startWorker().catch(error => {
+      logger.logError('[NapCat] Worker 恢复失败:', error);
+      scheduleRecovery();
+    });
+  }, 10 * 60_000);
 }
 
-/**
- * 重启 Worker 进程
- */
-export async function restartWorker (port?: number, expiredReason?: string, requestedSwitch = false): Promise<void> {
-  logger.logWarn('[NapCat] [Process] Worker重启请求', {
-    ...getLoginDiagnostics(),
-    workerPid: currentWorker?.pid,
-    alreadyRestarting: isRestarting,
-    sessionExpired: !!expiredReason,
+/** A stopped Worker cannot keep serving stale status or resolve an old login command. */
+function workerExited (child: IWorkerProcess, code: unknown, signal: unknown) {
+  if (currentWorker !== child) return;
+  currentWorker = undefined;
+  loginRequests.workerExited();
+  status.worker = isRestarting ? 'restarting' : 'stopped';
+  status.account = { ...status.account, phase: 'offline' };
+  logger.logWarn('[NapCat] Worker 退出', { pid: child.pid, code, signal, isRestarting, isShuttingDown });
+  if (isRestarting || isShuttingDown) return;
+  management?.workerFailed(status.account.account, `QQ Worker 意外退出 (${String(code ?? signal)})`);
+  const now = Date.now();
+  crashTimes.push(now);
+  while (crashTimes[0]! < now - 10_000) crashTimes.shift();
+  if (crashTimes.length >= 3) { scheduleRecovery(); return; }
+  startWorker().catch(error => {
+    logger.logError('[NapCat] Worker 启动失败:', error);
+    scheduleRecovery();
   });
-  if (requestedSwitch) switchAccount = true;
+}
+
+/** Replace only the Native Worker; the official bot remains connected in Master. */
+export async function restartWorker (port?: number, expiredReason?: string, method?: LoginMethod): Promise<void> {
   if (expiredReason && !sessionExpiredReason) {
     sessionExpiredReason = expiredReason;
     allowRecoveryQuickLogin = requestAutomaticRecovery();
   }
   if (isRestarting) return;
   isRestarting = true;
-
+  clearTimeout(recoveryTimer);
+  recoveryTimer = undefined;
+  status.worker = 'restarting';
   try {
-    if (!currentWorker) {
-      logger.logWarn('[NapCat] [Process] 没有运行中的Worker进程');
-      await startWorker(false);
-      return;
-    }
-
-    const workerPid = currentWorker.pid;
-
-    // 1. 通知旧进程准备重启（旧进程会自行退出）
-    currentWorker.postMessage({ type: 'restart-prepare' });
-
-    // 2. 等待进程退出（最多 5 秒，给更多时间让进程自行清理）
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        logger.logWarn('[NapCat] [Process] Worker进程未在 5 秒内退出，尝试发送强制关闭信号');
-        currentWorker?.postMessage({ type: 'shutdown' });
-
-        // 再等待 2 秒
-        setTimeout(() => {
-          logger.logWarn('[NapCat] [Process] Worker进程仍未退出，尝试 kill');
-          currentWorker?.kill();
-          resolve();
-        }, 2000);
-      }, 5000);
-
-      currentWorker?.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
+    const child = currentWorker;
+    if (child) {
+      await new Promise<void>(resolve => {
+        const timer = setTimeout(() => forceStopWorker(child), 5_000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+        child.postMessage({ type: 'restart-prepare' } satisfies WorkerMessage);
       });
-    });
-
-    // 3. 二次确认进程是否真的被终止（兜底检查）
-    if (workerPid && isProcessAlive(workerPid)) {
-      logger.logWarn(`[NapCat] [Process] 进程 ${workerPid} 仍在运行，尝试强制杀掉`);
-      forceKillProcess(workerPid);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      if (isProcessAlive(workerPid)) {
-        logger.logError(`[NapCat] [Process] 进程 ${workerPid} 无法终止，可能需要手动处理`);
-      }
     }
-
-    // 4. 等待后启动新进程
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // 5. 启动新进程（重启模式不传递快速登录参数，保留端口）
-    await startWorker(false, port);
+    await startWorker(port, method);
   } finally {
     isRestarting = false;
   }
 }
 
-/**
- * 启动 Worker 进程
- * @param passQuickLogin 是否传递快速登录参数，默认为 true，重启时为 false
- * @param preferredPort 优先使用的 WebUI 端口
- */
-async function startWorker (passQuickLogin: boolean = true, preferredPort?: number): Promise<void> {
-  if (!processManager) {
-    throw new Error('进程管理器未初始化');
-  }
-
-  const workerScript = getWorkerScriptPath();
-  const processType = getProcessTypeName();
-
-  // An expiry recovery may reuse the configured account once. Consume this
-  // permission at spawn so a Worker crash cannot repeat the same attempt.
-  const recoveryQuickLogin = !switchAccount && !!sessionExpiredReason && allowRecoveryQuickLogin;
-  if (sessionExpiredReason) logger.logWarn('[NapCat] [Process] 身份失效恢复', { automaticQuickLogin: recoveryQuickLogin });
-  // 常规启动和获准的身份恢复传递 -q 或 --qq 参数。
-  const workerArgs: string[] = [];
-  if (!switchAccount && ((passQuickLogin && !sessionExpiredReason) || recoveryQuickLogin)) {
-    const args = process.argv.slice(2);
-    const qIndex = args.findIndex(arg => arg === '-q' || arg === '--qq');
-    if (qIndex !== -1 && qIndex + 1 < args.length) {
-      const qFlag = args[qIndex];
-      const qValue = args[qIndex + 1];
-      if (qFlag && qValue) {
-        workerArgs.push(qFlag, qValue);
-      }
-    }
-  }
-
-  const child = processManager.createWorker(workerScript, workerArgs, {
+async function startWorker (preferredPort?: number, method?: LoginMethod): Promise<void> {
+  const config = getNapigConfig();
+  const { qqbot: _qqbot, ...workerConfig } = config;
+  // A manual login is explicit permission to try again; automatic session recovery
+  // consumes the existing budget once when the replacement Worker is created.
+  if (method) sessionExpiredReason = '';
+  const recoveryQuickLogin = !!sessionExpiredReason && allowRecoveryQuickLogin;
+  const workerScript = __filename.endsWith('.mjs')
+    ? path.join(path.dirname(__filename), 'napcat.mjs')
+    : path.join(path.dirname(__filename), 'napcat.js');
+  const child = processManager.createWorker(workerScript, [], {
     env: {
       ...process.env,
       NAPCAT_WORKER_PROCESS: '1',
-      NAPCAT_SWITCH_ACCOUNT: switchAccount ? '1' : '0',
       NAPCAT_SESSION_EXPIRED_REASON: sessionExpiredReason,
       NAPCAT_RECOVERY_QUICK_LOGIN: recoveryQuickLogin ? '1' : '0',
+      NAPCAT_LOGIN_METHOD: method || 'auto',
       ...(preferredPort ? { NAPCAT_WEBUI_PREFERRED_PORT: String(preferredPort) } : {}),
     },
     stdio: isElectron ? 'pipe' : ['inherit', 'pipe', 'pipe', 'ipc'],
   });
-
   allowRecoveryQuickLogin = false;
   currentWorker = child;
-  const workerStartedAt = performance.now();
-  let workerPid = child.pid;
-
-  // 监听标准输出（直接转发）
-  if (child.stdout) {
-    child.stdout.on('data', (data: Buffer) => {
-      process.stdout.write(data);
-    });
-  }
-
-  // 监听标准错误（直接转发）
-  if (child.stderr) {
-    child.stderr.on('data', (data: Buffer) => {
-      process.stderr.write(data);
-    });
-  }
-
-  // 监听子进程消息
-  child.on('message', (msg: unknown) => {
+  status.worker = 'starting';
+  status.account = { ...status.account, phase: 'reconnecting' };
+  child.stdout?.on('data', (data: Buffer) => process.stdout.write(data));
+  child.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
+  child.on('message', (raw: unknown) => {
     if (currentWorker !== child) return;
-    // 处理重启请求
-    if (typeof msg === 'object' && msg !== null && 'type' in msg) {
-      const message = msg as WorkerMessage;
-      if (message.type === 'account-switch-prepare') {
-        switchAccount = true;
-        switchingWorker = child;
-        child.postMessage({ type: 'account-switch-ready' });
-      } else if (message.type === 'restart') {
-        restartWorker(message.port, message.sessionExpiredReason, message.switchAccount).catch(e => {
-          logger.logError(`[NapCat] [${processType}] 重启Worker进程失败:`, e);
+    const message = raw as WorkerMessage;
+    switch (message.type) {
+      case 'worker-started':
+        child.postMessage({ type: 'configure', config: workerConfig } satisfies WorkerMessage);
+        break;
+      case 'account-state':
+        status.worker = 'running';
+        status.account = message.state;
+        management?.update(message.state);
+        break;
+      case 'login-result':
+        loginRequests.receive(message.id, message.result);
+        break;
+      case 'restart':
+        restartWorker(message.port, message.sessionExpiredReason, message.loginMethod).catch(error => {
+          logger.logError('[NapCat] Worker 重启失败:', error);
+          management?.workerFailed(config.account.id, 'QQ Worker 重启失败');
+          scheduleRecovery();
         });
-      } else if (message.type === 'login-success') {
-        if (child === switchingWorker) return;
-        switchingWorker = undefined;
+        break;
+      case 'login-success':
         sessionExpiredReason = '';
-        switchAccount = false;
-        logger.log(`[NapCat] [${processType}] Worker进程已登录成功，切换到正常重试策略`, {
-          ...getLoginDiagnostics(),
-          workerPid,
-          workerAgeMs: Math.round(performance.now() - workerStartedAt),
-        });
-      }
+        logger.log('[NapCat] QQ Worker 已登录', { ...getLoginDiagnostics(), workerPid: child.pid });
+        break;
     }
   });
-
-  // 监听子进程退出
-  child.on('exit', (code: unknown, signal: unknown) => {
-    logger.logWarn(`[NapCat] [${processType}] Worker退出诊断`, {
-      ...getLoginDiagnostics(),
-      workerPid,
-      workerAgeMs: Math.round(performance.now() - workerStartedAt),
-      exitCode: typeof code === 'number' ? code : null,
-      signal: typeof signal === 'string' ? signal : null,
-      isRestarting,
-      isShuttingDown,
-      currentWorker: currentWorker === child,
-    });
-    const exitCode = typeof code === 'number' ? code : 0;
-    if (exitCode !== 0) {
-      logger.logError(`[NapCat] [${processType}] Worker进程退出，退出码: ${exitCode}`);
-    }
-    // 如果不是由于主动重启或关闭引起的退出，尝试自动重新拉起
-    if (!isRestarting && !isShuttingDown) {
-      const now = Date.now();
-
-      // 清理超出时间窗口的崩溃记录
-      while (recentCrashTimestamps.length > 0 && now - recentCrashTimestamps[0]! > CRASH_TIME_WINDOW) {
-        recentCrashTimestamps.shift();
-      }
-
-      // 记录本次崩溃
-      recentCrashTimestamps.push(now);
-
-      if (recentCrashTimestamps.length >= MAX_CRASHES_IN_WINDOW) {
-        logger.logError(`[NapCat] [${processType}] Worker进程在 ${CRASH_TIME_WINDOW / 1000} 秒内异常退出 ${MAX_CRASHES_IN_WINDOW} 次，主进程退出`);
-        process.exit(1);
-      }
-
-      logger.logWarn(`[NapCat] [${processType}] Worker进程意外退出 (${recentCrashTimestamps.length}/${MAX_CRASHES_IN_WINDOW})，正在尝试重新拉起...`);
-
-      startWorker(true).catch(e => {
-        logger.logError(`[NapCat] [${processType}] 重新拉起Worker进程失败:`, e);
-      });
-    }
-  });
-
-  // 等待进程成功 spawn
+  child.on('exit', (code, signal) => workerExited(child, code, signal));
+  child.on('error', error => logger.logError('[NapCat] Worker 进程错误:', error));
   await new Promise<void>((resolve, reject) => {
-    const onSpawn = () => {
-      child.off('error', onError);
-      // UtilityProcess.pid can be unavailable before spawn or after exit.
-      workerPid = child.pid;
-      logger.log('[NapCat] [Process] Worker已创建', {
-        ...getLoginDiagnostics(),
-        workerPid,
-        processType,
-        passQuickLogin,
-        recoveryQuickLogin,
-        hasQuickLoginArgument: workerArgs.length > 0,
-        sessionExpired: !!sessionExpiredReason,
-      });
-      resolve();
+    const onError = (error: unknown) => {
+      if (currentWorker === child) {
+        currentWorker = undefined;
+        status.worker = 'stopped';
+        loginRequests.workerExited();
+      }
+      reject(error);
     };
-    const onError = (...args: unknown[]) => {
-      const err = args[0] as Error;
-      logger.logError(`[NapCat] [${processType}] Worker进程启动失败:`, err);
-      child.off('spawn', onSpawn);
-      reject(err);
-    };
-    child.once('spawn', onSpawn);
+    child.once('spawn', () => { child.off('error', onError); resolve(); });
     child.once('error', onError);
   });
 }
 
-/**
- * 启动 Master 进程
- */
-async function startMasterProcess (): Promise<void> {
-  // 连接命名管道（可通过环境变量禁用）
-  if (!ENV.isPipeDisabled) {
-    await connectToNamedPipe(logger).catch(e =>
-      logger.logError('命名管道连接失败', e)
-    );
+async function login (method: LoginMethod): Promise<LoginResult> {
+  if (status.account.phase === 'ready') return { result: true, message: '账号已经在线' };
+  if (isRestarting) return { result: false, message: 'QQ Worker 正在重启，请稍后重试' };
+  if (!currentWorker) {
+    clearTimeout(recoveryTimer);
+    recoveryTimer = undefined;
+    crashTimes.length = 0;
+    await restartWorker(undefined, undefined, method);
+    return { result: true, message: '已启动 QQ Worker，正在准备登录' };
   }
+  return loginRequests.request(method);
+}
 
-  // 启动 Worker 进程
-  await startWorker();
-
-  // 优雅关闭处理
+async function startMasterProcess (): Promise<void> {
+  const config = getNapigConfig();
+  status = { worker: 'starting', account: { account: config.account.id, phase: 'reconnecting', reason: '' } };
+  if (config.qqbot) {
+    management = startQQBotManagement({
+      config: config.qqbot,
+      publicUrl: config.webui.enabled ? config.webui['public-url'] : undefined,
+      getStatus: () => status,
+      login,
+      log: message => logger.logWarn(message),
+    });
+  }
+  if (!ENV.isPipeDisabled) {
+    await connectToNamedPipe(logger).catch(error => logger.logError('命名管道连接失败', error));
+  }
   const shutdown = () => {
     isShuttingDown = true;
-    if (currentWorker) {
-      currentWorker.postMessage({ type: 'shutdown' });
-      setTimeout(() => {
-        currentWorker?.kill();
-        process.exit(0);
-      }, 1000);
-    } else {
-      process.exit(0);
-    }
+    clearTimeout(recoveryTimer);
+    management?.stop();
+    const child = currentWorker;
+    if (!child) { process.exit(0); return; }
+    child.once('exit', () => process.exit(0));
+    child.postMessage({ type: 'shutdown' } satisfies WorkerMessage);
+    setTimeout(() => forceStopWorker(child), 1_000);
   };
-
-  process.on('SIGINT', () => shutdown());
-  process.on('SIGTERM', () => shutdown());
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+  await startWorker().catch(error => {
+    logger.logError('[NapCat] Worker 启动失败:', error);
+    management?.workerFailed(config.account.id, 'QQ Worker 启动失败');
+    scheduleRecovery();
+  });
 }
 
-/**
- * 启动 Worker 进程（子进程入口）
- */
 async function startWorkerProcess (): Promise<void> {
-  if (!processManager) {
-    throw new Error('进程管理器未初始化');
-  }
-
-  // 预加载 Node Addon（如果设置了环境变量）
+  let configure!: (config: NapigConfig) => void;
+  const configured = new Promise<NapigConfig>(resolve => { configure = resolve; });
+  processManager.onParentMessage((raw: unknown) => {
+    const message = raw as WorkerMessage;
+    if (message.type === 'configure') configure(message.config);
+    if (message.type === 'restart-prepare' || message.type === 'shutdown') process.exit(0);
+    if (message.type === 'login') {
+      WebUiDataRuntime.requestAccountLogin(message.method).then(result => {
+        processManager.sendToParent({ type: 'login-result', id: message.id, result } satisfies WorkerMessage);
+      }, error => {
+        processManager.sendToParent({ type: 'login-result', id: message.id, result: { result: false, message: error instanceof Error ? error.message : '登录请求失败' } } satisfies WorkerMessage);
+      });
+    }
+  });
+  processManager.sendToParent({ type: 'worker-started' } satisfies WorkerMessage);
+  setNapigConfig(await configured);
   const preloadAddonPath = process.env['NAPCAT_PRELOAD_NODE_ADDON_PATH'];
   if (preloadAddonPath) {
-    try {
-      const os = await import('os');
-      process.dlopen({ exports: {} }, preloadAddonPath, os.constants.dlopen.RTLD_NOW | os.constants.dlopen.RTLD_GLOBAL);
-      logger.log(`[NapCat] [Worker] 已预加载 Node Addon: ${preloadAddonPath}`);
-    } catch (error) {
-      logger.logError(`[NapCat] [Worker] 预加载 Node Addon 失败: ${preloadAddonPath}`, error);
-    }
+    const os = await import('node:os');
+    process.dlopen({ exports: {} }, preloadAddonPath, os.constants.dlopen.RTLD_NOW | os.constants.dlopen.RTLD_GLOBAL);
   }
-
-  let confirmAccountSwitch: (() => void) | undefined;
-
-  // 监听来自父进程的消息
-  processManager.onParentMessage((msg: unknown) => {
-    if (typeof msg === 'object' && msg !== null && 'type' in msg) {
-      if (msg.type === 'account-switch-ready') confirmAccountSwitch?.();
-      if (msg.type === 'restart-prepare' || msg.type === 'shutdown') {
-        setTimeout(() => {
-          process.exit(0);
-        }, 100);
-      }
-    }
+  WebUiDataRuntime.subscribeAccountState(state => {
+    processManager.sendToParent({ type: 'account-state', state } satisfies WorkerMessage);
   });
-
-  WebUiDataRuntime.setPrepareQQAccountSwitch(async () => {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        confirmAccountSwitch = undefined;
-        reject(new Error('主进程未确认账号切换，请重试'));
-      }, 3000);
-      confirmAccountSwitch = () => {
-        clearTimeout(timer);
-        confirmAccountSwitch = undefined;
-        resolve();
-      };
-      try {
-        if (!processManager!.sendToParent({ type: 'account-switch-prepare' })) throw new Error('无法与主进程通信');
-      } catch (error) {
-        clearTimeout(timer);
-        confirmAccountSwitch = undefined;
-        reject(error);
-      }
-    });
+  WebUiDataRuntime.setRestartProcessCall(async options => {
+    const sent = processManager.sendToParent({
+      type: 'restart',
+      port: webUiRuntimePort,
+      sessionExpiredReason: options?.sessionExpiredReason,
+      loginMethod: options?.loginMethod,
+    } satisfies WorkerMessage);
+    return { result: sent, message: sent ? '进程重启请求已发送' : '无法与主进程通信' };
   });
-
-  // 注册重启进程函数到 WebUI
-  WebUiDataRuntime.setRestartProcessCall(async (options) => {
-    try {
-      const success = processManager!.sendToParent({
-        type: 'restart',
-        port: webUiRuntimePort,
-        sessionExpiredReason: options?.sessionExpiredReason,
-        switchAccount: options?.switchAccount,
-      });
-
-      if (success) {
-        return { result: true, message: '进程重启请求已发送' };
-      } else {
-        return { result: false, message: '无法与主进程通信' };
-      }
-    } catch (e) {
-      logger.logError('[NapCat] [Process] 发送重启请求失败:', e);
-      return {
-        result: false,
-        message: '发送重启请求失败: ' + (e as Error).message,
-      };
-    }
-  });
-
-  // Core 和适配器就绪后，两个进程后端都必须通知 Master 清除恢复标记。
   await NCoreInitShell();
-  if (!WebUiDataRuntime.getQQSessionExpiredReason()) processManager!.sendToParent({ type: 'login-success' });
+  if (!WebUiDataRuntime.getQQSessionExpiredReason()) processManager.sendToParent({ type: 'login-success' } satisfies WorkerMessage);
 }
 
-/**
- * 主入口
- */
 async function main (): Promise<void> {
-  // 单进程模式：直接启动核心
   if (ENV.isMultiProcessDisabled) {
+    if (getNapigConfig().qqbot) throw new Error('官方机器人管理通道需要 Shell 多进程模式');
     await NCoreInitShell();
     return;
   }
-
-  // 多进程模式：初始化进程管理器
   const result = await createProcessManager();
   processManager = result.manager;
   isElectron = result.isElectron;
-
-  // 根据进程类型启动
-  if (ENV.isWorkerProcess) {
-    await startWorkerProcess();
-  } else {
-    await startMasterProcess();
-  }
+  if (ENV.isWorkerProcess) await startWorkerProcess();
+  else await startMasterProcess();
 }
 
-// 启动应用
-main().catch((e: Error) => {
-  logger.logError('[NapCat] [Process] 启动失败:', e);
+main().catch(error => {
+  logger.logError('[NapCat] 启动失败:', error);
   process.exit(1);
 });

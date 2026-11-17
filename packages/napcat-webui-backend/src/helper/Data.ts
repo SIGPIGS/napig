@@ -1,17 +1,13 @@
+import { getNapigConfig } from 'napcat-common/src/config';
 import { napCatVersion } from 'napcat-common/src/version';
 import { NapCatCoreWorkingEnv, type LoginRuntimeType, type QQLoginPhase, type RestartProcessOptions } from '../types';
-
-let restartSupported = false;
-let accountSwitching = process.env['NAPCAT_SWITCH_ACCOUNT'] === '1';
-let prepareAccountSwitch: (() => Promise<void>) | undefined;
-let logoutCallback: (() => Promise<void>) | undefined;
 
 let sessionExpiredReason = process.env['NAPCAT_SESSION_EXPIRED_REASON'] || '';
 
 const LoginRuntime: LoginRuntimeType = {
   workingEnv: NapCatCoreWorkingEnv.Unknown,
   QQLoginStatus: false, // 已实现 但太傻了 得去那边注册个回调刷新
-  QQLoginPhase: sessionExpiredReason ? 'reconnecting' : 'waiting_qrcode',
+  QQLoginPhase: 'reconnecting',
   QQQRCodeURL: '',
   QQLoginUin: '',
   QQLoginInfo: {
@@ -25,73 +21,70 @@ const LoginRuntime: LoginRuntimeType = {
   OneBotContext: null,
   onQQLoginStatusChange: async (status: boolean) => {
     LoginRuntime.QQLoginStatus = status;
+    notify();
   },
   onRefreshQRCode: async () => {
     throw new Error('QQ 登录服务尚未初始化，请稍后重试');
   },
   NapCatHelper: {
-    onOB11ConfigChanged: async () => {
-
-    },
-    onQuickLoginRequested: async () => {
-      return { result: false, message: '' };
-    },
-    onPasswordLoginRequested: async () => {
-      return { result: false, message: '密码登录功能未初始化' };
-    },
-    onCaptchaLoginRequested: async () => {
-      return { result: false, message: '验证码登录功能未初始化' };
-    },
-    onNewDeviceLoginRequested: async () => {
-      return { result: false, message: '新设备登录功能未初始化' };
-    },
     onRestartProcessRequested: async () => {
       return { result: false, message: '重启功能未初始化' };
     },
-    QQLoginList: [],
-    NewQQLoginList: [],
   },
   NapCatVersion: napCatVersion,
-  WebUiConfigQuickFunction: async () => {
-
-  },
 };
-function beginExplicitLogin () {
-  if (LoginRuntime.QQLoginPhase !== 'qrcode_failed') return;
-  LoginRuntime.QQLoginPhase = 'waiting_qrcode';
-  LoginRuntime.QQLoginError = '';
+
+export interface LoginAttemptView {
+  id: string;
+  proofWaterUrl?: string;
+  jumpUrl?: string;
 }
+export interface AccountState {
+  account: string;
+  phase: QQLoginPhase;
+  reason: string;
+  reasonKind?: 'kicked' | 'session_expired' | 'self_offline' | 'login_failed' | 'account_mismatch';
+  attemptId?: string;
+}
+type LoginResult = { result: boolean; message: string };
+let attempt: LoginAttemptView | undefined;
+let reasonKind: AccountState['reasonKind'];
+const listeners = new Set<(state: AccountState) => void>();
+let notificationPending = false;
+function notify () {
+  if (notificationPending) return;
+  notificationPending = true;
+  queueMicrotask(() => {
+    notificationPending = false;
+    const state = WebUiDataRuntime.getAccountState();
+    for (const listener of listeners) listener(state);
+  });
+}
+let loginCall: (method: 'auto' | 'qr') => Promise<LoginResult> = async () => ({ result: false, message: 'QQ 登录服务尚未就绪' });
+let captchaCall: (id: string, ticket: string, randstr: string, sid: string) => Promise<LoginResult> = async () => ({ result: false, message: '登录已失效' });
+let deviceCall: (id: string, token: string) => Promise<LoginResult> = async () => ({ result: false, message: '登录已失效' });
 
 export const WebUiDataRuntime = {
-  isQQAccountSwitching (): boolean {
-    return accountSwitching;
+  getAccountState (): AccountState {
+    return { account: getNapigConfig().account.id, phase: LoginRuntime.QQLoginPhase, reason: LoginRuntime.QQLoginError || sessionExpiredReason, reasonKind, attemptId: attempt?.id };
   },
-
-  setQQAccountSwitching (value: boolean): void {
-    accountSwitching = value;
+  subscribeAccountState (listener: (state: AccountState) => void) {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
   },
-
-  canSwitchQQAccount (): boolean {
-    return restartSupported && !!prepareAccountSwitch && !!logoutCallback;
+  setAccountReason (kind: AccountState['reasonKind'], reason: string) {
+    reasonKind = kind;
+    LoginRuntime.QQLoginError = reason;
+    notify();
   },
-
-  setPrepareQQAccountSwitch (callback: () => Promise<void>): void {
-    prepareAccountSwitch = callback;
-  },
-
-  async prepareQQAccountSwitch (): Promise<void> {
-    if (!prepareAccountSwitch) throw new Error('切换 QQ 账号需要 Shell 多进程模式');
-    await prepareAccountSwitch();
-  },
-
-  setQQLogoutCallback (callback: () => Promise<void>): void {
-    logoutCallback = callback;
-  },
-
-  async requestQQLogout (): Promise<void> {
-    if (!restartSupported || !prepareAccountSwitch || !logoutCallback) throw new Error('切换 QQ 账号需要 Shell 多进程模式');
-    await logoutCallback();
-  },
+  getLoginAttempt: () => attempt,
+  setLoginAttempt (value: LoginAttemptView | undefined) { attempt = value; notify(); },
+  setAccountLoginCall (callback: typeof loginCall) { loginCall = callback; },
+  requestAccountLogin (method: 'auto' | 'qr') { return loginCall(method); },
+  setCaptchaLoginCall (callback: typeof captchaCall) { captchaCall = callback; },
+  requestCaptchaLogin (id: string, ticket: string, randstr: string, sid: string) { return captchaCall(id, ticket, randstr, sid); },
+  setNewDeviceLoginCall (callback: typeof deviceCall) { deviceCall = callback; },
+  requestNewDeviceLogin (id: string, token: string) { return deviceCall(id, token); },
 
   getQQSessionExpiredReason (): string {
     return sessionExpiredReason;
@@ -99,6 +92,7 @@ export const WebUiDataRuntime = {
 
   setQQSessionExpiredReason (reason: string): void {
     sessionExpiredReason = reason;
+    notify();
   },
 
   setWorkingEnv (env: NapCatCoreWorkingEnv): void {
@@ -121,10 +115,12 @@ export const WebUiDataRuntime = {
 
   setQQLoginStatus (status: LoginRuntimeType['QQLoginStatus']): void {
     LoginRuntime.QQLoginStatus = status;
+    notify();
   },
 
   setQQLoginPhase (phase: QQLoginPhase): void {
     LoginRuntime.QQLoginPhase = phase;
+    notify();
   },
 
   getQQLoginPhase (): QQLoginPhase {
@@ -152,68 +148,6 @@ export const WebUiDataRuntime = {
     return LoginRuntime.QQLoginUin;
   },
 
-  getQQQuickLoginList (): LoginRuntimeType['NapCatHelper']['QQLoginList'] {
-    return LoginRuntime.NapCatHelper.QQLoginList;
-  },
-
-  setQQQuickLoginList (list: LoginRuntimeType['NapCatHelper']['QQLoginList']): void {
-    LoginRuntime.NapCatHelper.QQLoginList = list;
-  },
-
-  getQQNewLoginList (): LoginRuntimeType['NapCatHelper']['NewQQLoginList'] {
-    return LoginRuntime.NapCatHelper.NewQQLoginList;
-  },
-
-  setQQNewLoginList (list: LoginRuntimeType['NapCatHelper']['NewQQLoginList']): void {
-    LoginRuntime.NapCatHelper.NewQQLoginList = list;
-  },
-
-  setQuickLoginCall (func: LoginRuntimeType['NapCatHelper']['onQuickLoginRequested']): void {
-    LoginRuntime.NapCatHelper.onQuickLoginRequested = func;
-  },
-
-  requestQuickLogin: function (uin) {
-    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
-    beginExplicitLogin();
-    return LoginRuntime.NapCatHelper.onQuickLoginRequested(uin);
-  } as LoginRuntimeType['NapCatHelper']['onQuickLoginRequested'],
-
-  setPasswordLoginCall (func: LoginRuntimeType['NapCatHelper']['onPasswordLoginRequested']): void {
-    LoginRuntime.NapCatHelper.onPasswordLoginRequested = func;
-  },
-
-  requestPasswordLogin: function (uin: string, passwordMd5: string) {
-    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
-    beginExplicitLogin();
-    return LoginRuntime.NapCatHelper.onPasswordLoginRequested(uin, passwordMd5);
-  } as LoginRuntimeType['NapCatHelper']['onPasswordLoginRequested'],
-
-  setCaptchaLoginCall (func: LoginRuntimeType['NapCatHelper']['onCaptchaLoginRequested']): void {
-    LoginRuntime.NapCatHelper.onCaptchaLoginRequested = func;
-  },
-
-  requestCaptchaLogin: function (uin: string, passwordMd5: string, ticket: string, randstr: string, sid: string) {
-    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
-    return LoginRuntime.NapCatHelper.onCaptchaLoginRequested(uin, passwordMd5, ticket, randstr, sid);
-  } as LoginRuntimeType['NapCatHelper']['onCaptchaLoginRequested'],
-
-  setNewDeviceLoginCall (func: LoginRuntimeType['NapCatHelper']['onNewDeviceLoginRequested']): void {
-    LoginRuntime.NapCatHelper.onNewDeviceLoginRequested = func;
-  },
-
-  requestNewDeviceLogin: function (uin: string, passwordMd5: string, newDevicePullQrCodeSig: string) {
-    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待新的登录页面');
-    return LoginRuntime.NapCatHelper.onNewDeviceLoginRequested(uin, passwordMd5, newDevicePullQrCodeSig);
-  } as LoginRuntimeType['NapCatHelper']['onNewDeviceLoginRequested'],
-
-  setOnOB11ConfigChanged (func: LoginRuntimeType['NapCatHelper']['onOB11ConfigChanged']): void {
-    LoginRuntime.NapCatHelper.onOB11ConfigChanged = func;
-  },
-
-  setOB11Config: function (ob11) {
-    return LoginRuntime.NapCatHelper.onOB11ConfigChanged(ob11);
-  } as LoginRuntimeType['NapCatHelper']['onOB11ConfigChanged'],
-
   GetNapCatVersion () {
     return LoginRuntime.NapCatVersion;
   },
@@ -234,13 +168,6 @@ export const WebUiDataRuntime = {
     return LoginRuntime.QQDataPath;
   },
 
-  setWebUiConfigQuickFunction (func: LoginRuntimeType['WebUiConfigQuickFunction']): void {
-    LoginRuntime.WebUiConfigQuickFunction = func;
-  },
-  runWebUiConfigQuickFunction: async function () {
-    await LoginRuntime.WebUiConfigQuickFunction();
-  },
-
   setOneBotContext (context: any): void {
     LoginRuntime.OneBotContext = context;
   },
@@ -250,7 +177,6 @@ export const WebUiDataRuntime = {
   },
 
   setRestartProcessCall (func: (options?: RestartProcessOptions) => Promise<{ result: boolean; message: string; }>): void {
-    restartSupported = true;
     LoginRuntime.NapCatHelper.onRestartProcessRequested = func;
   },
 
@@ -260,6 +186,7 @@ export const WebUiDataRuntime = {
 
   setQQLoginError (error: string): void {
     LoginRuntime.QQLoginError = error;
+    notify();
   },
 
   getQQLoginError (): string {
@@ -275,7 +202,6 @@ export const WebUiDataRuntime = {
   },
 
   refreshQRCode: async function () {
-    if (accountSwitching && LoginRuntime.OneBotContext) throw new Error('QQ 账号正在退出，请等待登录服务恢复');
     const previousQRCodeUrl = LoginRuntime.QQQRCodeURL;
     const previousPhase = LoginRuntime.QQLoginPhase;
     LoginRuntime.QQLoginError = '';

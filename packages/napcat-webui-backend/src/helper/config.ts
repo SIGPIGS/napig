@@ -1,20 +1,17 @@
+import { getNapigConfig } from 'napcat-common/src/config';
 import { webUiPathWrapper } from '@/napcat-webui-backend/index';
 import { Type, Static } from '@sinclair/typebox';
-import { TypeCompiler } from '@sinclair/typebox/compiler';
 import { Value } from '@sinclair/typebox/value';
 import fs, { constants } from 'node:fs/promises';
 
 import { resolve } from 'node:path';
 
-import { deepMerge } from '../utils/object';
 import { themeType } from '../types/theme';
 
-// 限制尝试端口的次数，避免死循环
 // 定义配置的类型
 const WebUiConfigSchema = Type.Object({
   host: Type.String({ default: '::' }),
   port: Type.Number({ default: 6099 }),
-  autoLoginAccount: Type.String({ default: '' }),
   theme: themeType,
   // 是否关闭WebUI
   disableWebUI: Type.Boolean({ default: false }),
@@ -34,73 +31,46 @@ const WebUiConfigSchema = Type.Object({
 
 export type WebUiConfigType = Static<typeof WebUiConfigSchema>;
 
-// 读取当前目录下名为 webui.json 的配置文件，如果不存在则创建初始化配置文件
+// Service fields come from YAML; webui.json stores writable theme preferences.
 export class WebUiConfigWrapper {
   WebUiConfigData: WebUiConfigType | undefined = undefined;
 
-  private validateAndApplyDefaults (config: Partial<WebUiConfigType>): WebUiConfigType {
-    let data = config;
-    data = Value.Parse(WebUiConfigSchema, data) as Partial<WebUiConfigType>;
-    const validate = TypeCompiler.Compile(WebUiConfigSchema);
-    if (!validate.Check(data)) {
-      // Return original if validation failed, or throw
-    }
-    return data as WebUiConfigType;
-  }
-
-  private async ensureConfigFileExists (configPath: string): Promise<void> {
-    const configExists = await fs
-      .access(configPath, constants.F_OK)
-      .then(() => true)
-      .catch(() => false);
-    if (!configExists) {
-      await fs.writeFile(configPath, JSON.stringify(this.validateAndApplyDefaults({}), null, 4));
-    }
-  }
-
-  private async readAndValidateConfig (configPath: string): Promise<WebUiConfigType> {
-    const fileContent = await fs.readFile(configPath, 'utf-8');
-    return this.validateAndApplyDefaults(JSON.parse(fileContent));
-  }
-
-  private async writeConfig (configPath: string, config: WebUiConfigType): Promise<void> {
-    const hasWritePermission = await fs
-      .access(configPath, constants.W_OK)
-      .then(() => true)
-      .catch(() => false);
-    if (hasWritePermission) {
-      await fs.writeFile(configPath, JSON.stringify(config, null, 4));
-    } else {
-      console.warn(`文件: ${configPath} 没有写入权限, 配置的更改部分可能会在重启后还原.`);
-    }
-  }
-
   async GetWebUIConfig (): Promise<WebUiConfigType> {
-    if (this.WebUiConfigData) {
-      return this.WebUiConfigData;
-    }
-
+    if (this.WebUiConfigData) return this.WebUiConfigData;
+    const declared = getNapigConfig();
+    let theme;
     try {
-      const configPath = resolve(webUiPathWrapper.configPath, './webui.json');
-      await this.ensureConfigFileExists(configPath);
-      const parsedConfig = await this.readAndValidateConfig(configPath);
-      this.WebUiConfigData = parsedConfig;
-      return this.WebUiConfigData;
-    } catch (e) {
-      console.log('读取配置文件失败', e);
-      this.WebUiConfigData = this.validateAndApplyDefaults({});
-      return this.WebUiConfigData;
+      const stored = JSON.parse(await fs.readFile(resolve(webUiPathWrapper.configPath, 'webui.json'), 'utf8'));
+      theme = stored.theme;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    this.WebUiConfigData = Value.Default(WebUiConfigSchema, {
+      host: declared.webui.host,
+      port: declared.webui.port,
+      disableWebUI: !declared.webui.enabled,
+      accessControlMode: declared.webui.accessControlMode,
+      ipWhitelist: declared.webui.ipWhitelist,
+      ipBlacklist: declared.webui.ipBlacklist,
+      enableXForwardedFor: declared.webui.enableXForwardedFor,
+      theme,
+    }) as WebUiConfigType;
+    return this.WebUiConfigData;
   }
 
   async UpdateWebUIConfig (newConfig: Partial<WebUiConfigType>): Promise<void> {
-    const configPath = resolve(webUiPathWrapper.configPath, './webui.json');
-    // 合并现有配置
-    const currentConfig = await this.GetWebUIConfig();
-    const mergedConfig = deepMerge({ ...currentConfig }, newConfig);
-    const updatedConfig = this.validateAndApplyDefaults(mergedConfig);
-    await this.writeConfig(configPath, updatedConfig);
-    this.WebUiConfigData = updatedConfig;
+    if (Object.keys(newConfig).some(key => key !== 'theme')) {
+      throw new Error('CONFIG_MANAGED: edit webui in napig.yaml and restart');
+    }
+    const current = await this.GetWebUIConfig();
+    const theme = Value.Parse(themeType, newConfig.theme ?? current.theme) as WebUiConfigType['theme'];
+    const filename = resolve(webUiPathWrapper.configPath, 'webui.json');
+    let stored = {};
+    try { stored = JSON.parse(await fs.readFile(filename, 'utf8')); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await fs.writeFile(filename, JSON.stringify({ ...stored, theme }, null, 2));
+    this.WebUiConfigData = { ...current, theme };
   }
 
   // 获取日志文件夹路径
@@ -181,20 +151,6 @@ export class WebUiConfigWrapper {
     return resolve(webUiPathWrapper.configPath, './fonts/webui.woff');
   }
 
-  getAutoLoginAccount (): string | undefined {
-    return this.WebUiConfigData?.autoLoginAccount;
-  }
-
-  // 获取自动登录账号
-  async GetAutoLoginAccount (): Promise<string> {
-    return (await this.GetWebUIConfig()).autoLoginAccount;
-  }
-
-  // 更新自动登录账号
-  async UpdateAutoLoginAccount (uin: string): Promise<void> {
-    await this.UpdateWebUIConfig({ autoLoginAccount: uin });
-  }
-
   // 获取主题内容
   async GetTheme (): Promise<WebUiConfigType['theme']> {
     const config = await this.GetWebUIConfig();
@@ -213,20 +169,10 @@ export class WebUiConfigWrapper {
     return config.disableWebUI;
   }
 
-  // 更新是否禁用WebUI
-  async UpdateDisableWebUI (disable: boolean): Promise<void> {
-    await this.UpdateWebUIConfig({ disableWebUI: disable });
-  }
-
   // 获取访问控制模式
   async GetAccessControlMode (): Promise<'none' | 'whitelist' | 'blacklist'> {
     const config = await this.GetWebUIConfig();
     return config.accessControlMode;
-  }
-
-  // 更新访问控制模式
-  async UpdateAccessControlMode (mode: 'none' | 'whitelist' | 'blacklist'): Promise<void> {
-    await this.UpdateWebUIConfig({ accessControlMode: mode });
   }
 
   // 获取IP白名单
@@ -235,30 +181,15 @@ export class WebUiConfigWrapper {
     return config.ipWhitelist;
   }
 
-  // 更新IP白名单
-  async UpdateIpWhitelist (whitelist: string[]): Promise<void> {
-    await this.UpdateWebUIConfig({ ipWhitelist: whitelist });
-  }
-
   // 获取IP黑名单
   async GetIpBlacklist (): Promise<string[]> {
     const config = await this.GetWebUIConfig();
     return config.ipBlacklist;
   }
 
-  // 更新IP黑名单
-  async UpdateIpBlacklist (blacklist: string[]): Promise<void> {
-    await this.UpdateWebUIConfig({ ipBlacklist: blacklist });
-  }
-
   // 获取是否启用 X-Forwarded-For
   async GetEnableXForwardedFor (): Promise<boolean> {
     const config = await this.GetWebUIConfig();
     return config.enableXForwardedFor || false;
-  }
-
-  // 更新是否启用 X-Forwarded-For
-  async UpdateEnableXForwardedFor (enable: boolean): Promise<void> {
-    await this.UpdateWebUIConfig({ enableXForwardedFor: enable });
   }
 }

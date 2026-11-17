@@ -1,0 +1,25 @@
+# Copy to napig.yaml, or set NAPIG_CONFIG to its absolute path.
+webui:
+  public-url: https://napcat.example.com
+  # enabled: false  # A headless instance does not need public-url.
+  # host: "::"
+  # port: 6099
+
+account:
+  id: "123456789"
+  # password: "optional QQ password"
+
+onebot:
+  network:
+    websocketClients:
+      - name: service
+        enable: true
+        url: ws://consumer:3001
+        token: "replace-with-your-onebot-token"
+
+# Omit qqbot to disable the official QQ management bot.
+# qqbot:
+#   app-id: "102551831"
+#   app-secret: "replace-with-your-app-secret"
+#   admins:
+#     - "C2C user_openid returned by /whoami"

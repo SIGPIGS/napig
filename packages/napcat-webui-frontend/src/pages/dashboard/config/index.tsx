@@ -105,7 +105,7 @@ export default function ConfigPage () {
             <ThemeConfigCard />
           </ConfigPageItem>
         </Tab>
-        <Tab title='备份与恢复' key='backup'>
+        <Tab title='导出 OneBot' key='backup'>
           <ConfigPageItem>
             <BackupConfigCard />
           </ConfigPageItem>

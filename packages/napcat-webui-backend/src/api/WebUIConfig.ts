@@ -36,20 +36,8 @@ export const GetDisableWebUIHandler: RequestHandler = async (_, res) => {
 };
 
 // 更新是否禁用WebUI
-export const UpdateDisableWebUIHandler: RequestHandler = async (req, res) => {
-  try {
-    const { disable } = req.body;
-
-    if (typeof disable !== 'boolean') {
-      return sendError(res, 'disable参数必须是布尔值');
-    }
-
-    await WebUiConfig.UpdateDisableWebUI(disable);
-    return sendSuccess(res, null);
-  } catch (error) {
-    const msg = (error as Error).message;
-    return sendError(res, `更新WebUI禁用状态失败: ${msg}`);
-  }
+export const UpdateDisableWebUIHandler: RequestHandler = async (_, res) => {
+  return sendError(res, 'CONFIG_MANAGED: edit webui in napig.yaml and restart');
 };
 
 // 获取当前客户端IP
@@ -90,67 +78,8 @@ export const GetClientIPHandler: RequestHandler = async (req, res) => {
 };
 
 // 更新WebUI基础配置
-export const UpdateWebUIConfigHandler: RequestHandler = async (req, res) => {
-  try {
-    const { host, port, disableWebUI, accessControlMode, ipWhitelist, ipBlacklist, enableXForwardedFor } = req.body;
-
-    const updateConfig: any = {};
-
-    if (host !== undefined) {
-      if (isEmpty(host)) {
-        return sendError(res, 'host不能为空');
-      }
-      updateConfig.host = host;
-    }
-
-    if (port !== undefined) {
-      if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        return sendError(res, 'port必须是1-65535之间的整数');
-      }
-      updateConfig.port = port;
-    }
-
-    if (disableWebUI !== undefined) {
-      if (typeof disableWebUI !== 'boolean') {
-        return sendError(res, 'disableWebUI必须是布尔值');
-      }
-      updateConfig.disableWebUI = disableWebUI;
-    }
-
-    if (accessControlMode !== undefined) {
-      if (!['none', 'whitelist', 'blacklist'].includes(accessControlMode)) {
-        return sendError(res, 'accessControlMode必须是none、whitelist或blacklist');
-      }
-      updateConfig.accessControlMode = accessControlMode;
-    }
-
-    if (ipWhitelist !== undefined) {
-      if (!Array.isArray(ipWhitelist)) {
-        return sendError(res, 'ipWhitelist必须是数组');
-      }
-      updateConfig.ipWhitelist = ipWhitelist;
-    }
-
-    if (ipBlacklist !== undefined) {
-      if (!Array.isArray(ipBlacklist)) {
-        return sendError(res, 'ipBlacklist必须是数组');
-      }
-      updateConfig.ipBlacklist = ipBlacklist;
-    }
-
-    if (enableXForwardedFor !== undefined) {
-      if (typeof enableXForwardedFor !== 'boolean') {
-        return sendError(res, 'enableXForwardedFor必须是布尔值');
-      }
-      updateConfig.enableXForwardedFor = enableXForwardedFor;
-    }
-
-    await WebUiConfig.UpdateWebUIConfig(updateConfig);
-    return sendSuccess(res, null);
-  } catch (error) {
-    const msg = (error as Error).message;
-    return sendError(res, `更新WebUI配置失败: ${msg}`);
-  }
+export const UpdateWebUIConfigHandler: RequestHandler = async (_, res) => {
+  return sendError(res, 'CONFIG_MANAGED: edit webui in napig.yaml and restart');
 };
 
 // 获取SSL证书状态
